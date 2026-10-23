@@ -76,12 +76,26 @@ export type FirestoreSubCollection =
   | 'users'
   | 'info';
 
+/**
+ * Chuẩn hóa ID document Firestore: Thay thế toàn bộ dấu gạch chéo (/ và \), dấu hai chấm và khoảng trắng
+ * Bắt buộc để Firestore không bao giờ bị lỗi 'Document references must have an even number of segments'
+ */
+export function sanitizeFirestoreDocId(rawId?: string | null): string {
+  if (!rawId) return `doc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  return String(rawId)
+    .replace(/[\/\\]+/g, '_')
+    .replace(/[:\s]+/g, '_')
+    .replace(/__+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .trim() || `doc_${Date.now()}`;
+}
+
 export class FirestoreRepository {
   /**
    * Lấy đường dẫn Document tham chiếu đến Trường học: schools/{schoolId}
    */
   public getSchoolDocRef(schoolId: string) {
-    const sId = schoolId || 'school_quyhop';
+    const sId = sanitizeFirestoreDocId(schoolId || 'school_quyhop');
     return doc(db, 'schools', sId);
   }
 
@@ -89,7 +103,7 @@ export class FirestoreRepository {
    * Lấy Collection tham chiếu của một Sub-collection: schools/{schoolId}/{subCollection}
    */
   public getSubCollectionRef(schoolId: string, subCollection: FirestoreSubCollection) {
-    const sId = schoolId || 'school_quyhop';
+    const sId = sanitizeFirestoreDocId(schoolId || 'school_quyhop');
     return collection(db, 'schools', sId, subCollection);
   }
 
@@ -97,8 +111,9 @@ export class FirestoreRepository {
    * Lấy Document tham chiếu: schools/{schoolId}/{subCollection}/{docId}
    */
   public getSubDocRef(schoolId: string, subCollection: FirestoreSubCollection, docId: string) {
-    const sId = schoolId || 'school_quyhop';
-    return doc(db, 'schools', sId, subCollection, docId);
+    const sId = sanitizeFirestoreDocId(schoolId || 'school_quyhop');
+    const safeDocId = sanitizeFirestoreDocId(docId);
+    return doc(db, 'schools', sId, subCollection, safeDocId);
   }
 
   // ===================== CRUD GENERIC =====================
@@ -305,8 +320,9 @@ export class FirestoreRepository {
 
       for (const item of chunk) {
         if (!item.id) continue;
-        const docRef = this.getSubDocRef(schoolId, subCollection, String(item.id));
-        const sanitized = sanitizeForFirestore({ ...item, schoolId });
+        const safeId = sanitizeFirestoreDocId(String(item.id));
+        const docRef = this.getSubDocRef(schoolId, subCollection, safeId);
+        const sanitized = sanitizeForFirestore({ ...item, id: safeId, schoolId });
         batch.set(docRef, sanitized, { merge: true });
         savedCount++;
       }
@@ -411,11 +427,12 @@ export class FirestoreRepository {
   public async saveSchoolLicense(license: SchoolTenantLicense): Promise<void> {
     if (!license || !license.id) return;
     if (!auth.currentUser) await ensureFirebaseAuth();
-    const sId = license.id;
+    const sId = sanitizeFirestoreDocId(license.id);
     // 1. Lưu vào collection licenses/{sId}
     const licRef = doc(db, 'licenses', sId);
     const sanitized = sanitizeForFirestore({
       ...license,
+      id: sId,
       assignedPasswordHint: license.assignedPasswordHint || '123456',
       updatedAt: new Date().toISOString(),
     });
@@ -464,9 +481,10 @@ export class FirestoreRepository {
     try {
       if (!schoolId) return;
       if (!auth.currentUser) await ensureFirebaseAuth();
-      const licRef = doc(db, 'licenses', schoolId);
+      const safeId = sanitizeFirestoreDocId(schoolId);
+      const licRef = doc(db, 'licenses', safeId);
       await deleteDoc(licRef);
-      const schoolRef = this.getSchoolDocRef(schoolId);
+      const schoolRef = this.getSchoolDocRef(safeId);
       await deleteDoc(schoolRef);
     } catch (err) {
       console.warn('Lỗi xóa license trên Cloud Firestore:', err);
@@ -480,7 +498,8 @@ export class FirestoreRepository {
     try {
       if (!schoolId) return null;
       if (!auth.currentUser) await ensureFirebaseAuth();
-      const docRef = doc(db, 'licenses', schoolId);
+      const safeId = sanitizeFirestoreDocId(schoolId);
+      const docRef = doc(db, 'licenses', safeId);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
         return {
@@ -503,7 +522,7 @@ export class FirestoreRepository {
     onUpdate: (license: SchoolTenantLicense | null) => void
   ): Unsubscribe {
     ensureFirebaseAuth().catch(() => {});
-    const sId = schoolId || 'school_quyhop';
+    const sId = sanitizeFirestoreDocId(schoolId || 'school_quyhop');
     const licRef = doc(db, 'licenses', sId);
     return onSnapshot(
       licRef,
