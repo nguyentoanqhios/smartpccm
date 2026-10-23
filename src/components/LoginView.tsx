@@ -81,7 +81,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     if (initialSchoolId && initialSchoolId !== 'school_quyhop') {
       dataStore.ensureSchoolLicenseLoaded(initialSchoolId).then((loadedLic) => {
         if (loadedLic) {
-          if (!urlParams.schoolName && loadedLic.schoolName) {
+          if ((!urlParams.schoolName || urlParams.schoolName === 'TRƯỜNG THCS MỚI') && loadedLic.schoolName && loadedLic.schoolName !== 'TRƯỜNG THCS MỚI') {
             setSchoolName(loadedLic.schoolName);
           }
           if (!urlParams.adminEmail && loadedLic.adminEmail && !email) {
@@ -94,7 +94,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     const unsub = dataStore.subscribe(() => {
       const curLic = dataStore.getSchoolLicenseById(schoolId || initialSchoolId);
       if (curLic) {
-        if (curLic.schoolName && !urlParams.schoolName) {
+        if ((!urlParams.schoolName || urlParams.schoolName === 'TRƯỜNG THCS MỚI') && curLic.schoolName && curLic.schoolName !== 'TRƯỜNG THCS MỚI') {
           setSchoolName(curLic.schoolName);
         }
         if (curLic.adminEmail && !email && !urlParams.adminEmail) {

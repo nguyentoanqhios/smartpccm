@@ -117,25 +117,11 @@ export const isSuperAdminEmail = (email?: string | null): boolean => {
 
 export { isSystemSyncEmail };
 
-export const isBlacklistedSchool = (id?: string | null, name?: string | null): boolean => {
-  const normId = (id || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const normName = (name || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, '');
-  return (
-    normId.includes('thongke') ||
-    normName.includes('thongke') ||
-    normId.includes('thunghiem') ||
-    normName.includes('thunghiem') ||
-    normId.includes('thcs_thu_nghiem') ||
-    normId.includes('thcsthunghiem') ||
-    normId === 'school_thcs_thu_nghiem' ||
-    normId === 'school_thu_nghiem' ||
-    normId === 'thcs_thu_nghiem' ||
-    normId === 'thu_nghiem'
-  );
+export const isBlacklistedSchool = (id?: string | null, _name?: string | null): boolean => {
+  if (!id) return false;
+  const normId = id.trim().toLowerCase();
+  // Only blacklist obsolete fixed legacy seed IDs from early dev prototyping
+  return normId === 'school_thcs_thu_nghiem_seed_legacy';
 };
 
 export const isThongKeSchool = (id?: string | null, name?: string | null): boolean => {
@@ -291,7 +277,9 @@ class DataStore {
 
       if (schoolIdParam && schoolIdParam.trim()) {
         let cleaned = schoolIdParam.trim();
-        if (!cleaned.startsWith('school_') && cleaned !== 'quyhop') {
+        if (cleaned.toLowerCase() === 'quyhop') {
+          cleaned = 'school_quyhop';
+        } else if (!cleaned.startsWith('school_')) {
           cleaned = `school_${cleaned}`;
         }
         // Không nhận mã trường THỐNG KÊ đã xóa
@@ -358,7 +346,9 @@ class DataStore {
       let normalizedSchoolId = schoolId?.trim() || null;
       if (normalizedSchoolId) {
         normalizedSchoolId = normalizedSchoolId.toLowerCase();
-        if (!normalizedSchoolId.startsWith('school_') && normalizedSchoolId !== 'quyhop') {
+        if (normalizedSchoolId === 'quyhop') {
+          normalizedSchoolId = 'school_quyhop';
+        } else if (!normalizedSchoolId.startsWith('school_')) {
           normalizedSchoolId = `school_${normalizedSchoolId}`;
         }
       }
@@ -736,25 +726,6 @@ class DataStore {
       this.saveLocalCacheOnly();
 
       const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
-      const BLACKLIST_SCHOOL_IDS = [
-        'school_thongke',
-        'thongke',
-        'school_thcs_thu_nghiem',
-        'thcs_thu_nghiem',
-        'school_thu_nghiem',
-        'thu_nghiem',
-      ];
-      BLACKLIST_SCHOOL_IDS.forEach((badId) => {
-        if (!deletedSchoolIds.includes(badId)) {
-          deletedSchoolIds.push(badId);
-        }
-      });
-      this.setItem('pccm_deleted_school_ids', deletedSchoolIds);
-
-      // Xóa triệt để khỏi Cloud Firestore phòng khi còn lưu vết trên server
-      firestoreRepository.deleteSchoolLicense('school_thcs_thu_nghiem').catch(() => {});
-      firestoreRepository.deleteSchoolLicense('thcs_thu_nghiem').catch(() => {});
-      firestoreRepository.deleteSchoolLicense('school_thongke').catch(() => {});
 
       const cachedLicenses = (this.getItem(STORAGE_KEYS.SCHOOL_LICENSES, INITIAL_SCHOOL_LICENSES) as SchoolTenantLicense[]);
       const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
@@ -2318,7 +2289,8 @@ class DataStore {
       }
     }
 
-    this.saveToStorage();
+    this.saveToStorage(true);
+    this.saveLocalCacheOnly();
 
     // Lưu bản sao lưu an toàn thứ hai để chống mất dữ liệu khi trình duyệt xóa cache cục bộ
     try {
@@ -2330,6 +2302,18 @@ class DataStore {
         backupLicenses.push(cleanLicense);
       }
       this.setItem('pccm_all_registered_school_licenses', backupLicenses);
+    } catch {}
+
+    // Lưu registry thông tin trường theo tenant
+    try {
+      this.schoolInfoByTenant[cleanLicense.id] = {
+        ...(this.schoolInfoByTenant[cleanLicense.id] || DEFAULT_SCHOOL_INFO),
+        schoolName: cleanLicense.schoolName,
+        email: cleanLicense.adminEmail || '',
+        phone: cleanLicense.contactPhone || '',
+        principalName: cleanLicense.adminName || '',
+      };
+      this.setItem('pccm_school_info_tenants_v1', this.schoolInfoByTenant);
     } catch {}
 
     if (typeof window !== 'undefined') {

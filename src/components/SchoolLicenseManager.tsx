@@ -396,7 +396,8 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     }
 
     // Always generate complete school ID from full school name if not editing
-    const sId = editingLicense ? editingLicense.id : (formSchoolId.trim() || generateSchoolId(formSchoolName));
+    const rawId = formSchoolId.trim() || generateSchoolId(formSchoolName);
+    const sId = editingLicense ? editingLicense.id : (rawId === 'school_quyhop' ? `school_quyhop_${Math.random().toString(36).substring(2, 6)}` : rawId);
 
     const newLicense: SchoolTenantLicense = {
       id: sId,
@@ -416,7 +417,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     };
 
     await dataStore.saveSchoolLicense(newLicense);
-    setLicenses(dataStore.getSchoolLicenses());
+    setLicenses([...dataStore.getSchoolLicenses()]);
     setIsAddModalOpen(false);
     showToast(`Đã lưu và cấp quyền cho trường "${formSchoolName.trim()}"!`);
 
@@ -492,6 +493,9 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       baseOrigin = window.location.origin;
     }
 
+    const sName = licenseObj?.schoolName;
+    const sEmail = licenseObj?.adminEmail;
+
     if (mode === 'PREVIEW') {
       baseOrigin = 'https://ais-pre-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
     } else if (mode === 'CUSTOM' && handoverCustomDomain.trim()) {
@@ -511,9 +515,13 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
         return custom.replace(/^https?:\/\/pccm-[a-z0-9_-]+/i, `https://pccm-${sSlug || 'main'}`);
       }
 
-      // 3. Nếu là domain gốc: tạo link ngắn gọn thẩm mỹ https://domain/?s=slug
-      if (sSlug) {
-        return `${custom}/?s=${sSlug}`;
+      // 3. Nếu là domain gốc: truyền đầy đủ tham số để bất kỳ máy nào mở cũng nhận diện đúng tên trường
+      if (sId) {
+        const params = new URLSearchParams();
+        params.set('schoolId', sId);
+        if (sName && sName !== 'TRƯỜNG THCS MỚI') params.set('schoolName', sName);
+        if (sEmail) params.set('adminEmail', sEmail);
+        return `${custom}/?${params.toString()}`;
       }
       return custom;
     }
@@ -522,10 +530,16 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     const fullBase = `${baseOrigin}${cleanPath}`;
 
     if (sId) {
-      // Link ngắn gọn, chuyên nghiệp: ?s=slug (VD: https://smartpccm.vercel.app/?s=truong_thcs_vercel)
-      // Đã khử hoàn toàn các tham số cồng kềnh dài lê thê, hệ thống tự động nhận diện tên trường và email quản trị
-      const sSlug = getSchoolSlug(sId);
-      return `${baseOrigin}/?s=${sSlug}`;
+      // Truyền tham số schoolId và schoolName rõ ràng để thiết bị đối tác luôn nhận diện 100% tên trường chính xác
+      const params = new URLSearchParams();
+      params.set('schoolId', sId);
+      if (sName && sName !== 'TRƯỜNG THCS MỚI') {
+        params.set('schoolName', sName);
+      }
+      if (sEmail) {
+        params.set('adminEmail', sEmail);
+      }
+      return `${baseOrigin}/?${params.toString()}`;
     }
     return fullBase;
   };
