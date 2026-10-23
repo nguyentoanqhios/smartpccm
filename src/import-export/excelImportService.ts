@@ -535,26 +535,74 @@ export function isValidPersonName(nameRaw?: string): boolean {
 }
 
 export function parseExcelDate(val: any): string {
-  if (!val) return '';
+  if (val === null || val === undefined) return '';
   if (val instanceof Date) {
+    if (isNaN(val.getTime())) return '';
     const y = val.getFullYear();
+    if (y < 1920 || y > 2050) return '';
     const m = String(val.getMonth() + 1).padStart(2, '0');
     const d = String(val.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
   const str = String(val).trim();
+  if (
+    !str ||
+    str === '0' ||
+    str === '-' ||
+    str.toLowerCase() === 'null' ||
+    str.toLowerCase() === 'undefined' ||
+    str.toLowerCase() === 'n/a' ||
+    str.toLowerCase() === 'none'
+  ) {
+    return '';
+  }
+
+  // Format DD/MM/YYYY or DD-MM-YYYY
   const dmy = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
   if (dmy) {
-    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    const day = parseInt(dmy[1], 10);
+    const month = parseInt(dmy[2], 10);
+    const year = parseInt(dmy[3], 10);
+    if (year >= 1920 && year <= 2050 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
   }
+
+  // Format YYYY/MM/DD or YYYY-MM-DD
   const ymd = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/);
   if (ymd) {
-    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    const year = parseInt(ymd[1], 10);
+    const month = parseInt(ymd[2], 10);
+    const day = parseInt(ymd[3], 10);
+    if (year >= 1920 && year <= 2050 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
   }
+
+  // If only a 4-digit year e.g. "1975"
   if (/^\d{4}$/.test(str)) {
-    return str;
+    const year = parseInt(str, 10);
+    if (year >= 1920 && year <= 2050) {
+      return str;
+    }
+    return '';
   }
-  return str;
+
+  // Handle Javascript GMT Date string or ISO string e.g. "Tue Oct 21 1975 07:00:00 GMT+0700 (Indochina Time)"
+  const parsedTimestamp = Date.parse(str);
+  if (!isNaN(parsedTimestamp)) {
+    const d = new Date(parsedTimestamp);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      if (year >= 1920 && year <= 2050) {
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+    }
+  }
+
+  return '';
 }
 
 export function parseExcelGender(val: any): 'Nam' | 'Nữ' {
@@ -1758,68 +1806,155 @@ export async function importComprehensiveInitialSetupWorkbook(
     messages.push(`✓ Đã nạp ${detectedDepartments.length} tổ chuyên môn`);
   }
 
-  // 3. Tìm và phân tích Sheet LỚP HỌC
-  const wsClasses = workbook.worksheets.find((ws) => {
+  // 3. Tìm và phân tích Sheet LỚP HỌC (ưu tiên đúng sheet chứa danh mục lớp, tránh nhầm sheet phân công)
+  let wsClasses = workbook.worksheets.find((ws) => {
     const n = normalizeStr(ws.name);
-    return n.includes('lop') || n.includes('class');
+    return (
+      (n.includes('lop hoc') ||
+        n.includes('danh sach lop') ||
+        n.includes('ds lop') ||
+        n.includes('danh muc lop') ||
+        n === 'lop' ||
+        n === 'classes' ||
+        n.includes('4. lop')) &&
+      !n.includes('phan cong') &&
+      !n.includes('tiet')
+    );
   });
+  if (!wsClasses) {
+    wsClasses = workbook.worksheets.find((ws) => {
+      const n = normalizeStr(ws.name);
+      return (n.includes('lop') || n.includes('class')) && !n.includes('phan cong');
+    });
+  }
 
   if (wsClasses) {
-    let codeCol = 2;
-    let nameCol = 3;
-    let gradeCol = 4;
-    let countCol = 5;
-    let sessionCol = 6;
-    let wpCol = 7;
-    let roomCol = 8;
+    let codeCol = -1;
+    let nameCol = -1;
+    let gradeCol = -1;
+    let countCol = -1;
+    let sessionCol = -1;
+    let wpCol = -1;
+    let roomCol = -1;
     let startRow = 3;
 
-    for (let r = 1; r <= Math.min(5, wsClasses.rowCount); r++) {
+    for (let r = 1; r <= Math.min(6, wsClasses.rowCount); r++) {
       const row = wsClasses.getRow(r);
+      let matchedCount = 0;
+      let tempCode = -1;
+      let tempName = -1;
+      let tempGrade = -1;
+      let tempCount = -1;
+      let tempSession = -1;
+      let tempWp = -1;
+      let tempRoom = -1;
+
       row.eachCell((cell, col) => {
         const text = normalizeStr(cell.value);
-        if (text.includes('ma lop')) codeCol = col;
-        if (text.includes('ten lop')) nameCol = col;
-        if (text.includes('khoi')) gradeCol = col;
-        if (text.includes('si so')) countCol = col;
-        if (text.includes('buoi')) sessionCol = col;
-        if (text.includes('diem truong') || text.includes('noi hoc')) wpCol = col;
-        if (text.includes('phong')) roomCol = col;
+        if (!text) return;
+        if (text === 'ma lop' || text === 'code' || text === 'class code') {
+          tempCode = col;
+          matchedCount += 2;
+        } else if (text === 'ten lop' || text === 'lop hoc' || text === 'ten lop hoc') {
+          tempName = col;
+          matchedCount += 2;
+        } else if (text === 'lop' || text === 'class') {
+          if (tempName === -1) tempName = col;
+          else if (tempCode === -1) tempCode = col;
+          matchedCount += 1;
+        } else if (text.includes('khoi') || text === 'grade') {
+          tempGrade = col;
+          matchedCount += 1;
+        } else if (text.includes('si so') || text.includes('hoc sinh') || text.includes('so hs')) {
+          tempCount = col;
+          matchedCount += 1;
+        } else if (text.includes('buoi') || text.includes('ca hoc') || text.includes('session')) {
+          tempSession = col;
+          matchedCount += 1;
+        } else if (text.includes('diem truong') || text.includes('noi hoc') || text.includes('phan hieu')) {
+          tempWp = col;
+          matchedCount += 1;
+        } else if (text.includes('phong') || text.includes('room')) {
+          tempRoom = col;
+          matchedCount += 1;
+        }
       });
-      if (normalizeStr(row.getCell(codeCol).value).includes('ma lop') || normalizeStr(row.getCell(nameCol).value).includes('ten lop')) {
+
+      if (matchedCount >= 2 || tempCode !== -1 || tempName !== -1) {
+        if (tempCode !== -1) codeCol = tempCode;
+        if (tempName !== -1) nameCol = tempName;
+        if (tempGrade !== -1) gradeCol = tempGrade;
+        if (tempCount !== -1) countCol = tempCount;
+        if (tempSession !== -1) sessionCol = tempSession;
+        if (tempWp !== -1) wpCol = tempWp;
+        if (tempRoom !== -1) roomCol = tempRoom;
         startRow = r + 1;
         break;
       }
     }
 
+    if (codeCol === -1 && nameCol !== -1) codeCol = nameCol;
+    if (nameCol === -1 && codeCol !== -1) nameCol = codeCol;
+    if (codeCol === -1) {
+      codeCol = 2;
+      nameCol = 3;
+      gradeCol = 4;
+      countCol = 5;
+      sessionCol = 6;
+      wpCol = 7;
+      roomCol = 8;
+      startRow = 3;
+    }
+
     for (let r = startRow; r <= wsClasses.rowCount; r++) {
       const row = wsClasses.getRow(r);
-      const code = getCellStr(row, codeCol) || getCellStr(row, nameCol);
-      if (!code) continue;
+      const rawCode = codeCol > 0 ? getCellStr(row, codeCol) : '';
+      const rawName = nameCol > 0 ? getCellStr(row, nameCol) : '';
+      const primaryStr = (rawCode || rawName || '').trim();
+      if (!primaryStr) continue;
 
-      let grade: any = 6;
-      const gMatch = code.match(/([6-9])/);
-      if (gMatch) {
-        grade = parseInt(gMatch[1], 10);
-      } else {
-        const rawGrade = getCellNum(row, gradeCol, 6);
-        if ([6, 7, 8, 9].includes(rawGrade)) grade = rawGrade;
+      const normCheck = normalizeStr(primaryStr);
+      if (
+        normCheck.includes('tong cong') ||
+        normCheck.includes('tong so') ||
+        normCheck.includes('nguoi lap') ||
+        normCheck.includes('hieu truong') ||
+        normCheck.startsWith('stt')
+      ) {
+        continue;
       }
 
-      const sessionText = normalizeStr(getCellStr(row, sessionCol));
+      let cleanCode = primaryStr.replace(/^(Lớp|Lop|Khối|Khoi)\s*[-:]?\s*/i, '').trim().toUpperCase();
+      if (!cleanCode && rawName) {
+        cleanCode = rawName.replace(/^(Lớp|Lop|Khối|Khoi)\s*[-:]?\s*/i, '').trim().toUpperCase();
+      }
+      if (!cleanCode) continue;
+
+      let grade: any = 6;
+      const gMatch = cleanCode.match(/^([6-9]|1[0-2])/);
+      if (gMatch) {
+        grade = parseInt(gMatch[1], 10);
+      } else if (gradeCol > 0) {
+        const rawGrade = getCellNum(row, gradeCol, 6);
+        if ([6, 7, 8, 9, 10, 11, 12].includes(rawGrade)) grade = rawGrade;
+      }
+
+      const sessionText = sessionCol > 0 ? normalizeStr(getCellStr(row, sessionCol)) : '';
       const session: SchoolSession = sessionText.includes('chieu') || sessionText.includes('afternoon') ? 'AFTERNOON' : 'MORNING';
-      const studentCount = getCellNum(row, countCol, 35);
-      const wp = getCellStr(row, wpCol) || 'Điểm chính';
+      const studentCount = countCol > 0 ? getCellNum(row, countCol, 35) : 35;
+      const wp = wpCol > 0 ? getCellStr(row, wpCol) || 'Điểm chính' : 'Điểm chính';
+      const displayName = rawName && rawName.startsWith('Lớp') ? rawName : `Lớp ${cleanCode}`;
+      const safeClassId = `cls_${targetSchoolId}_${cleanCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
       detectedClasses.push({
-        id: `c_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-        code: code.toUpperCase(),
-        name: getCellStr(row, nameCol) || `Lớp ${code.toUpperCase()}`,
+        id: safeClassId,
+        code: cleanCode,
+        name: displayName,
         grade,
         studentCount,
         session,
-        branchId: wp.toLowerCase().includes('phân hiệu') ? 'branch_sub' : 'branch_main',
-        room: getCellStr(row, roomCol),
+        branchId: wp.toLowerCase().includes('phân hiệu') || wp.toLowerCase().includes('diem le') ? 'branch_sub' : 'branch_main',
+        room: roomCol > 0 ? getCellStr(row, roomCol) : undefined,
         active: true,
       });
     }
@@ -1906,12 +2041,17 @@ export async function importComprehensiveInitialSetupWorkbook(
       const subsRaw = colMap['subjects'] ? getCellStr(row, colMap['subjects']) : '';
       const subjectsCanTeach = subsRaw ? subsRaw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean) : [];
 
+      const safeTeacherId = `tc_${targetSchoolId}_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const parsedBirth = colMap['birth']
+        ? parseExcelDate(row.getCell(colMap['birth']).value || getCellStr(row, colMap['birth']))
+        : undefined;
+
       detectedTeachers.push({
-        id: `t_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Date.now().toString(36).substring(2, 6)}`,
+        id: safeTeacherId,
         code,
         fullName: name,
         gender,
-        birthDate: colMap['birth'] ? getCellStr(row, colMap['birth']) : undefined,
+        birthDate: parsedBirth || undefined,
         startYear: startYearVal,
         initialDegree: colMap['initialDegree'] ? getCellStr(row, colMap['initialDegree']) : undefined,
         higherDegree: colMap['higherDegree'] ? getCellStr(row, colMap['higherDegree']) : undefined,

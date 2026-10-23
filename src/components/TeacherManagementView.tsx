@@ -80,16 +80,51 @@ interface TeacherManagementViewProps {
   searchFilterToken?: number;
 }
 
-const formatBirthDate = (bDate?: string) => {
+const formatBirthDate = (bDate?: string): string | null => {
   if (!bDate) return null;
   const trimmed = bDate.trim();
-  if (trimmed.includes('-')) {
-    const parts = trimmed.split('-');
-    if (parts.length === 3) {
-      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  if (
+    !trimmed ||
+    trimmed === '-' ||
+    trimmed === '0' ||
+    trimmed.toLowerCase() === 'null' ||
+    trimmed.toLowerCase() === 'undefined'
+  ) {
+    return null;
+  }
+
+  // Format YYYY-MM-DD
+  const ymd = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymd) {
+    return `${ymd[3].padStart(2, '0')}/${ymd[2].padStart(2, '0')}/${ymd[1]}`;
+  }
+
+  // Format DD/MM/YYYY
+  const dmy = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    return `${dmy[1].padStart(2, '0')}/${dmy[2].padStart(2, '0')}/${dmy[3]}`;
+  }
+
+  // Only 4-digit year
+  if (/^\d{4}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Handle Javascript GMT Date strings or ISO strings (e.g. "Tue Oct 21 1975 07:00:00 GMT+0700 (Indochina Time)")
+  const parsed = Date.parse(trimmed);
+  if (!isNaN(parsed)) {
+    const d = new Date(parsed);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      if (year >= 1920 && year <= 2050) {
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        return `${day}/${month}/${year}`;
+      }
     }
   }
-  return trimmed;
+
+  return null;
 };
 
 export type TeacherColumnKey =

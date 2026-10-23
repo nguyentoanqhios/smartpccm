@@ -1690,13 +1690,32 @@ class DataStore {
     }
 
     if (payload.classes && payload.classes.length > 0) {
-      this.classes = payload.classes;
+      const prevClassIds = this.classes.map((c) => c.id);
+      const newClassIdSet = new Set(payload.classes.map((c) => c.id));
+      prevClassIds.forEach((cid) => {
+        if (!newClassIdSet.has(cid)) {
+          firestoreRepository.deleteDocData(sId, 'classes', cid).catch(() => {});
+        }
+      });
+      this.classes = payload.classes.map((c) => ({
+        ...c,
+        schoolId: sId,
+        isDeleted: false,
+      }));
     }
 
     if (payload.teachers && payload.teachers.length > 0) {
+      const prevTeacherIds = this.teachers.map((t) => t.id);
+      const newTeacherIdSet = new Set(payload.teachers.map((t) => t.id));
+      prevTeacherIds.forEach((tid) => {
+        if (!newTeacherIdSet.has(tid)) {
+          firestoreRepository.deleteDocData(sId, 'teachers', tid).catch(() => {});
+        }
+      });
       this.teachers = payload.teachers.map((t) => ({
         ...t,
         schoolId: sId,
+        isDeleted: false,
       }));
     }
 
@@ -2589,8 +2608,22 @@ class DataStore {
       // 2. Teachers
       const unsubTeachers = firestoreRepository.subscribeCollection<Teacher>(sId, 'teachers', (items) => {
         if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.teachers = items;
+        if (items) {
+          const deduped: Teacher[] = [];
+          const seenIds = new Set<string>();
+          const seenKeys = new Set<string>();
+          for (const item of items) {
+            if (!item || !item.fullName) continue;
+            if (seenIds.has(item.id)) continue;
+            const codeKey = (item.code || '').trim().toUpperCase();
+            const nameKey = removeVietnameseTones(item.fullName.trim());
+            const uniqueKey = codeKey ? `${codeKey}_${nameKey}` : nameKey;
+            if (seenKeys.has(uniqueKey)) continue;
+            seenIds.add(item.id);
+            seenKeys.add(uniqueKey);
+            deduped.push(item);
+          }
+          this.teachers = deduped;
           this.saveLocalCacheOnly();
           this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
           this.notify();
@@ -2601,8 +2634,20 @@ class DataStore {
       // 3. Classes
       const unsubClasses = firestoreRepository.subscribeCollection<SchoolClass>(sId, 'classes', (items) => {
         if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.classes = items;
+        if (items) {
+          const deduped: SchoolClass[] = [];
+          const seenIds = new Set<string>();
+          const seenKeys = new Set<string>();
+          for (const item of items) {
+            if (!item || (!item.code && !item.name)) continue;
+            if (seenIds.has(item.id)) continue;
+            const key = (item.code || item.name || '').trim().toUpperCase();
+            if (seenKeys.has(key)) continue;
+            seenIds.add(item.id);
+            seenKeys.add(key);
+            deduped.push(item);
+          }
+          this.classes = deduped;
           this.saveLocalCacheOnly();
           this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
           this.notify();
@@ -3606,10 +3651,6 @@ class DataStore {
       list = list.filter((t) => t.schoolId === this.currentSchoolId);
     } else {
       list = list.filter((t) => !t.schoolId || t.schoolId === 'school_quyhop');
-      if (list.length < 40) {
-        this.teachers = QUYHOP_TEACHERS.map((t) => ({ ...t, schoolId: 'school_quyhop' }));
-        list = includeDeleted ? this.teachers : this.teachers.filter((t) => !t.isDeleted);
-      }
     }
     return [...list];
   }
@@ -4348,10 +4389,12 @@ class DataStore {
       if (existingIndex !== -1 && mode === 'UPSERT') {
         const existing = this.teachers[existingIndex];
         const updates: Partial<Teacher> = {};
+        // Khôi phục giáo viên nếu trước đó từng bị xóa
+        updates.isDeleted = false;
         if (tData.fullName) updates.fullName = tData.fullName.trim();
         if (tData.code && !tData.code.startsWith('STT')) updates.code = tData.code.trim();
         if (tData.gender) updates.gender = tData.gender;
-        if (tData.birthDate) updates.birthDate = tData.birthDate;
+        if (tData.birthDate !== undefined) updates.birthDate = tData.birthDate;
         if (tData.startYear) updates.startYear = tData.startYear;
         if (tData.initialDegree) updates.initialDegree = tData.initialDegree;
         if (tData.higherDegree !== undefined) updates.higherDegree = tData.higherDegree;
@@ -4386,12 +4429,14 @@ class DataStore {
           assignedCode = `GV${String(this.teachers.length + 1).padStart(2, '0')}`;
         }
 
+        const safeId = tData.id || `tc_${this.currentSchoolId}_${assignedCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const newTeacher: Teacher = {
-          id: tData.id || `tc_${timestamp}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          id: safeId,
           code: assignedCode,
           fullName: tData.fullName.trim(),
           gender: tData.gender || 'Nữ',
           birthDate: tData.birthDate || '',
+          isDeleted: false,
           startYear: tData.startYear,
           initialDegree: tData.initialDegree || 'Đại học Sư phạm',
           higherDegree: tData.higherDegree || '',
@@ -4704,6 +4749,13 @@ class DataStore {
       if (c.homeroomTeacherId === id) c.homeroomTeacherId = undefined;
     });
 
+    const targetSId = this.currentSchoolId || 'school_quyhop';
+    if (permanent) {
+      firestoreRepository.deleteDocData(targetSId, 'teachers', id).catch(() => {});
+    } else {
+      firestoreRepository.setDocData(targetSId, 'teachers', id, { isDeleted: true }, true).catch(() => {});
+    }
+
     this.logAction({
       action: 'DELETE',
       entityType: 'TEACHER',
@@ -4738,6 +4790,15 @@ class DataStore {
     }
 
     if (count > 0) {
+      const targetSId = this.currentSchoolId || 'school_quyhop';
+      teacherIds.forEach((tid) => {
+        if (permanent) {
+          firestoreRepository.deleteDocData(targetSId, 'teachers', tid).catch(() => {});
+        } else {
+          firestoreRepository.setDocData(targetSId, 'teachers', tid, { isDeleted: true }, true).catch(() => {});
+        }
+      });
+
       // Clean up departments
       this.departments.forEach((d) => {
         if (d.teacherIds) {
@@ -4774,6 +4835,9 @@ class DataStore {
     if (!item) return false;
 
     item.isDeleted = false;
+    const targetSId = this.currentSchoolId || 'school_quyhop';
+    firestoreRepository.setDocData(targetSId, 'teachers', id, { isDeleted: false }, true).catch(() => {});
+
     this.logAction({
       action: 'RESTORE',
       entityType: 'TEACHER',
@@ -4798,6 +4862,11 @@ class DataStore {
     }
 
     if (count > 0) {
+      const targetSId = this.currentSchoolId || 'school_quyhop';
+      teacherIds.forEach((tid) => {
+        firestoreRepository.setDocData(targetSId, 'teachers', tid, { isDeleted: false }, true).catch(() => {});
+      });
+
       this.logAction({
         action: 'RESTORE',
         entityType: 'TEACHER',
@@ -4926,8 +4995,19 @@ class DataStore {
     }
 
     if (mode === 'REPLACE') {
-      if (teachersToImport.length > 0) this.teachers = [];
-      if (classesToImport.length > 0) this.classes = [];
+      const targetSId = this.currentSchoolId || 'school_quyhop';
+      if (teachersToImport.length > 0) {
+        this.teachers.forEach((t) => {
+          firestoreRepository.deleteDocData(targetSId, 'teachers', t.id).catch(() => {});
+        });
+        this.teachers = [];
+      }
+      if (classesToImport.length > 0) {
+        this.classes.forEach((c) => {
+          firestoreRepository.deleteDocData(targetSId, 'classes', c.id).catch(() => {});
+        });
+        this.classes = [];
+      }
       if (assignmentsToImport.length > 0) this.assignments = [];
     }
 
@@ -4942,7 +5022,9 @@ class DataStore {
         if (existingIdx !== -1 && mode === 'MERGE') {
           this.teachers[existingIdx] = {
             ...this.teachers[existingIdx],
+            isDeleted: false,
             fullName: t.fullName || this.teachers[existingIdx].fullName,
+            birthDate: t.birthDate !== undefined ? t.birthDate : this.teachers[existingIdx].birthDate,
             departmentId: t.departmentId || this.teachers[existingIdx].departmentId,
             major: t.major || this.teachers[existingIdx].major,
             standardQuota: t.standardQuota || this.teachers[existingIdx].standardQuota,
@@ -4950,10 +5032,14 @@ class DataStore {
             email: t.email || this.teachers[existingIdx].email,
           };
         } else {
+          const assignedCode = t.code || `GV${(this.teachers.length + 1).toString().padStart(2, '0')}`;
+          const safeId = t.id || `tc_${this.currentSchoolId}_${assignedCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
           this.teachers.push({
-            id: t.id || `tc_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
-            code: t.code || `GV${(this.teachers.length + 1).toString().padStart(2, '0')}`,
+            id: safeId,
+            code: assignedCode,
             fullName: t.fullName || 'Giáo viên',
+            birthDate: t.birthDate || '',
+            isDeleted: false,
             departmentId: t.departmentId || 'dept_toan_tin',
             status: t.status || 'ACTIVE',
             standardQuota: t.standardQuota || 19,
@@ -4982,19 +5068,22 @@ class DataStore {
         if (existingIdx !== -1 && mode === 'MERGE') {
           this.classes[existingIdx] = {
             ...this.classes[existingIdx],
+            isDeleted: false,
             studentCount: c.studentCount || this.classes[existingIdx].studentCount,
             session: c.session || this.classes[existingIdx].session,
             grade: grade || this.classes[existingIdx].grade,
           };
         } else {
+          const safeClassId = c.id || `cls_${this.currentSchoolId}_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
           this.classes.push({
-            id: c.id || `cls_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
+            id: safeClassId,
             code,
             name,
             grade,
             studentCount: c.studentCount || 35,
             session,
             active: true,
+            isDeleted: false,
           });
         }
       });

@@ -259,27 +259,23 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
 
     try {
       if (comprehensivePayload) {
-        try {
-          await dataStore.applyComprehensiveInitialSetup(comprehensivePayload, dataStore.getSchoolId());
-        } catch (e) {
-          console.warn('Comprehensive apply fallback to bulkImportData', e);
-        }
+        await dataStore.applyComprehensiveInitialSetup(comprehensivePayload, dataStore.getSchoolId());
+      } else {
+        // Đảm bảo tên trường luôn cố định theo Bản quyền đơn vị, không bao giờ bị ghi đè thành trường khác
+        const guaranteedSchoolName = dataStore.getSchoolInfo().schoolName;
+        const safeSchoolInfo: SchoolInfo = {
+          ...schoolInfo,
+          schoolName: guaranteedSchoolName,
+        };
+
+        dataStore.bulkImportData({
+          teachersToImport: importPreview.teachersToImport,
+          classesToImport: importPreview.classesToImport,
+          assignmentsToImport: importPreview.assignmentsToImport,
+          schoolInfoDetected: safeSchoolInfo,
+          mode: importMode,
+        });
       }
-
-      // Đảm bảo tên trường luôn cố định theo Bản quyền đơn vị, không bao giờ bị ghi đè thành trường khác
-      const guaranteedSchoolName = dataStore.getSchoolInfo().schoolName;
-      const safeSchoolInfo: SchoolInfo = {
-        ...schoolInfo,
-        schoolName: guaranteedSchoolName,
-      };
-
-      dataStore.bulkImportData({
-        teachersToImport: importPreview.teachersToImport,
-        classesToImport: importPreview.classesToImport,
-        assignmentsToImport: importPreview.assignmentsToImport,
-        schoolInfoDetected: safeSchoolInfo,
-        mode: importMode,
-      });
 
       const successData = {
         teachersCount: importPreview.teachersToImport.length,
