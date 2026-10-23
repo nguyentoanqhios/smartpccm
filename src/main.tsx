@@ -15,6 +15,9 @@ try {
         </ErrorBoundary>
       </StrictMode>,
     );
+    if (typeof window !== 'undefined') {
+      (window as any).__PCCM_MOUNTED__ = true;
+    }
   }
 } catch (err: any) {
   console.error('Fatal initialization error:', err);

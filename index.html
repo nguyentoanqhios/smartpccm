@@ -21,21 +21,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
     <script>
-      // 1. Tự động dọn sạch Service Worker cũ & CacheStorage nếu đang chạy trong môi trường Dev / Preview Cloud Run / localhost
+      // 1. Tự động hủy đăng ký toàn bộ Service Worker và dọn sạch CacheStorage trên MỌI môi trường
+      // Ngăn chặn 100% sự cố trình duyệt lưu đệm file JS/HTML cũ dẫn đến lỗi tải trang
       (function() {
         try {
-          var isDevOrPreview = window.location.hostname.includes('run.app') ||
-                               window.location.hostname.includes('localhost') ||
-                               window.location.hostname.includes('127.0.0.1') ||
-                               window.location.hostname.includes('google.com');
-          if (isDevOrPreview && 'serviceWorker' in navigator) {
+          if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(regs) {
               for (var i = 0; i < regs.length; i++) {
                 regs[i].unregister();
               }
             }).catch(function() {});
           }
-          if (isDevOrPreview && 'caches' in window) {
+          if ('caches' in window) {
             caches.keys().then(function(names) {
               for (var j = 0; j < names.length; j++) {
                 caches.delete(names[j]);
@@ -44,12 +41,46 @@
           }
         } catch (e) {}
 
+        // Hàm xóa sạch cache và tải lại trực tiếp từ máy chủ
+        window.pccmPurgeAndReload = function(clearStorage) {
+          try {
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                for (var i = 0; i < regs.length; i++) {
+                  regs[i].unregister();
+                }
+              }).catch(function() {});
+            }
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                for (var j = 0; j < names.length; j++) {
+                  caches.delete(names[j]);
+                }
+              }).catch(function() {});
+            }
+            if (clearStorage) {
+              sessionStorage.clear();
+            }
+          } catch (e) {}
+          var currentUrl = new URL(window.location.href);
+          currentUrl.searchParams.set('_pccm_v', Date.now());
+          window.location.href = currentUrl.toString();
+        };
+
         // 2. Chặn lỗi HMR WebSocket khi dev server tắt HMR theo environment constraints
         var oldOnError = window.onerror;
         window.onerror = function(message, source, lineno, colno, error) {
           var str = String(message || '') + String(source || '') + String(error || '');
           if (str.indexOf('send') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('vite') !== -1) {
             return true;
+          }
+          if (!window.__PCCM_MOUNTED__) {
+            var btn = document.getElementById('pccm-force-reload-btn');
+            if (btn) btn.style.display = 'flex';
+            var notice = document.getElementById('pccm-loader-notice');
+            if (notice) {
+              notice.innerHTML = 'Phát hiện phiên bản mới từ máy chủ. Vui lòng bấm nút bên dưới để tải lại!';
+            }
           }
           if (typeof oldOnError === 'function') {
             return oldOnError.apply(this, arguments);
@@ -70,6 +101,10 @@
             event.stopImmediatePropagation();
             return true;
           }
+          if (!window.__PCCM_MOUNTED__) {
+            var btn = document.getElementById('pccm-force-reload-btn');
+            if (btn) btn.style.display = 'flex';
+          }
         }, true);
       })();
     </script>
@@ -82,18 +117,29 @@
         <h2 style="font-size: 18px; font-weight: 700; color: #1e3a8a; margin: 0 0 8px 0; letter-spacing: -0.01em;">
           PHÂN CÔNG CHUYÊN MÔN
         </h2>
-        <p style="font-size: 13px; font-weight: 500; color: #64748b; margin: 0 0 24px 0; max-width: 380px; line-height: 1.5;">
+        <p id="pccm-loader-notice" style="font-size: 13px; font-weight: 500; color: #64748b; margin: 0 0 20px 0; max-width: 420px; line-height: 1.6;">
           Đang khởi động hệ thống và nạp dữ liệu trường học...
         </p>
-        <button id="pccm-force-reload-btn" type="button" onclick="localStorage.clear(); sessionStorage.clear(); window.location.reload();" style="display: none; padding: 10px 20px; background-color: #1e3a8a; color: #ffffff; border: none; border-radius: 12px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(30, 58, 138, 0.25);">
-          Làm mới phiên làm việc
-        </button>
+        <div id="pccm-force-reload-btn" style="display: none; gap: 10px; flex-direction: column; align-items: center;">
+          <button type="button" onclick="window.pccmPurgeAndReload(false);" style="padding: 10px 22px; background-color: #1e3a8a; color: #ffffff; border: none; border-radius: 12px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(30, 58, 138, 0.25);">
+            Tải lại phiên bản mới nhất
+          </button>
+          <button type="button" onclick="window.pccmPurgeAndReload(true);" style="padding: 8px 16px; background-color: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 12px; font-weight: 500; cursor: pointer;">
+            Làm mới phiên làm việc
+          </button>
+        </div>
         <script>
-          // Nếu sau 4.5 giây mà React chưa mount vào #root, hiển thị nút làm mới
+          // Nếu sau 3.5 giây mà React chưa mount vào #root, hiển thị nút làm mới
           setTimeout(function() {
-            var btn = document.getElementById('pccm-force-reload-btn');
-            if (btn) btn.style.display = 'inline-block';
-          }, 4500);
+            if (!window.__PCCM_MOUNTED__) {
+              var btn = document.getElementById('pccm-force-reload-btn');
+              if (btn) btn.style.display = 'flex';
+              var notice = document.getElementById('pccm-loader-notice');
+              if (notice) {
+                notice.innerHTML = 'Hệ thống đang hoàn tất kết nối hoặc cập nhật phiên bản mới.<br/>Quý Thầy/Cô có thể bấm nút bên dưới để tải ngay bản mới nhất!';
+              }
+            }
+          }, 3500);
         </script>
         <style>
           @keyframes pccm-spin {

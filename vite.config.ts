@@ -72,6 +72,8 @@ export default defineConfig(() => {
       tailwindcss(),
       aistudioMediaPlugin(),
       VitePWA({
+        selfDestroying: true,
+        injectRegister: null,
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg'],
         manifest: {
@@ -92,10 +94,6 @@ export default defineConfig(() => {
               purpose: 'any',
             },
           ],
-        },
-        workbox: {
-          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         },
         devOptions: {
           enabled: false,
