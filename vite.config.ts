@@ -111,13 +111,13 @@ export default defineConfig(() => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
-      chunkSizeWarningLimit: 2500,
+      chunkSizeWarningLimit: 3500,
       rollupOptions: {
         output: {
           manualChunks(id) {
             if (id.includes('node_modules')) {
-              if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
-                return 'vendor-react';
+              if (id.includes('firebase')) {
+                return 'vendor-firebase';
               }
               if (id.includes('exceljs')) {
                 return 'vendor-excel';
@@ -125,13 +125,9 @@ export default defineConfig(() => {
               if (id.includes('recharts') || id.includes('d3')) {
                 return 'vendor-charts';
               }
-              if (id.includes('firebase')) {
-                return 'vendor-firebase';
-              }
               if (id.includes('lucide-react')) {
                 return 'vendor-icons';
               }
-              return 'vendor';
             }
           },
         },
