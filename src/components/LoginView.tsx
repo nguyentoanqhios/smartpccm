@@ -73,7 +73,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [errorType, setErrorType] = useState<'INVALID_CREDENTIAL' | 'EMAIL_IN_USE' | 'GENERAL' | null>(null);
+  const [errorType, setErrorType] = useState<'INVALID_CREDENTIAL' | 'EMAIL_IN_USE' | 'UNAUTHORIZED_DOMAIN' | 'GENERAL' | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Lắng nghe dữ liệu trường & tải license từ Firestore nếu cần
@@ -261,6 +261,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
     } catch (err: any) {
       console.warn('Google sign-in error:', err);
+      if (err?.code === 'auth/unauthorized-domain') {
+        setErrorType('UNAUTHORIZED_DOMAIN');
+      }
       if (err?.code === 'auth/popup-closed-by-user') {
         setErrorMessage('Đã đóng cửa sổ đăng nhập Google. Bạn có thể thử lại hoặc đăng nhập bằng Email/Mật khẩu.');
       } else {
@@ -683,6 +686,37 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   >
                     👉 Đăng ký tài khoản mới với email này
                   </button>
+                </div>
+              )}
+              {errorType === 'UNAUTHORIZED_DOMAIN' && (
+                <div className="flex flex-col gap-2 mt-1 pt-2 border-t border-rose-200/70">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const host = typeof window !== 'undefined' ? window.location.hostname : 'ais-dev-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
+                        navigator.clipboard.writeText(host);
+                        setSuccessMessage(`Đã sao chép tên miền: ${host}`);
+                        setTimeout(() => setSuccessMessage(null), 3000);
+                      }}
+                      className="px-2.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Sao chép tên miền ({typeof window !== 'undefined' ? window.location.hostname : 'run.app'})
+                    </button>
+                    <a
+                      href="https://console.firebase.google.com/project/smartpccm/authentication/settings"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold text-[11px] transition flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Globe className="w-3.5 h-3.5" />
+                      Mở Firebase Console (Authorized domains) ↗
+                    </a>
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed font-normal">
+                    💡 <b>Cách nhanh nhất:</b> Quý Thầy/Cô đăng nhập trực tiếp bằng <b>Email & Mật khẩu</b> do Ban Quản trị cấp ở khung bên dưới để vào hệ thống ngay lập tức mà không cần cấu hình tên miền.
+                  </p>
                 </div>
               )}
             </div>
