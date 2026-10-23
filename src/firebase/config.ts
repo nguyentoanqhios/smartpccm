@@ -10,12 +10,12 @@ import {
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCqwelEZ14tLS4tajdEr1R6DoSq3jQlqMY",
-  authDomain: "phancongchuyenmon-86f00.firebaseapp.com",
-  projectId: "phancongchuyenmon-86f00",
-  storageBucket: "phancongchuyenmon-86f00.firebasestorage.app",
-  messagingSenderId: "978823138370",
-  appId: "1:978823138370:web:881ca4b4ffff8b1f8cf1db"
+  apiKey: "AIzaSyDki0VaW73--yCx7tRo9ATl0RST0IUxjIQ",
+  authDomain: "smartpccm.firebaseapp.com",
+  projectId: "smartpccm",
+  storageBucket: "smartpccm.firebasestorage.app",
+  messagingSenderId: "576388296448",
+  appId: "1:576388296448:web:e97ec09403dc2c3b610de5"
 };
 
 export const app = initializeApp(firebaseConfig);
