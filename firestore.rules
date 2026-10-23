@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions for Role-Based Access Control (RBAC)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return request.auth.token.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (getUserRole() == 'admin' || request.auth.token.email.matches('.*admin.*'));
+    }
+    
+    function isPrincipal() {
+      return isAuthenticated() && (isAdmin() || getUserRole() == 'principal');
+    }
+    
+    function isDean() {
+      return isAuthenticated() && (isPrincipal() || getUserRole() == 'dean');
+    }
+    
+    // Public read for school years, subjects, departments
+    match /school_years/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    match /departments/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    match /subjects/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    match /classes/{id} {
+      allow read: if true;
+      allow write: if isPrincipal();
+    }
+    
+    match /curriculum/{id} {
+      allow read: if true;
+      allow write: if isPrincipal();
+    }
+    
+    match /teachers/{id} {
+      allow read: if true;
+      allow write: if isPrincipal();
+    }
+    
+    match /duties/{id} {
+      allow read: if true;
+      allow write: if isPrincipal();
+    }
+    
+    // Assignments: Teachers can view, Deans can propose, Principals & Admins can approve & lock
+    match /assignments/{id} {
+      allow read: if true;
+      allow create, update: if isDean();
+      allow delete: if isPrincipal();
+    }
+    
+    // Versions: Only Principal & Admin can approve/lock
+    match /versions/{id} {
+      allow read: if true;
+      allow write: if isPrincipal();
+    }
+    
+    // Audit logs: Append-only by authenticated users, readable by Admin & Principal
+    match /audit_logs/{id} {
+      allow read: if isPrincipal();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+    
+    // Feedbacks
+    match /feedbacks/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if isPrincipal();
+    }
+
+    // Users collection (both root and nested)
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Multi-tenant School isolation & collections
+    match /schools/{schoolId} {
+      allow read, write: if true;
+
+      match /{allPaths=**} {
+        allow read, write: if true;
+      }
+    }
+
+    // School Licenses & Subscriptions
+    match /licenses/{licenseId} {
+      allow read, write: if true;
+    }
+  }
+}

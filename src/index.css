@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+/* ========================================================================= */
+/* DEDICATED PRINT STYLES FOR OFFICIAL A4 FORMS & ADMINISTRATIVE REPORTS     */
+/* ========================================================================= */
+@media print {
+  /* 1. Hide all application chrome, navigation, headers, footers, toasts & buttons */
+  header,
+  aside,
+  nav,
+  footer,
+  #header-toast-settings-btn,
+  #user-profile-btn,
+  #pwa-install-btn,
+  .print\:hidden,
+  .fixed,
+  .no-print,
+  .report4-toggle-btn,
+  [role="dialog"] {
+    display: none !important;
+  }
+
+  /* 2. Reset html & body backgrounds and margins */
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 11px !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 3. Ensure the printable report container is expanded cleanly */
+  #official-printable-report,
+  #analytics-printable-report {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 4mm 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  /* 4. Table borders and structure */
+  #official-printable-report table,
+  #analytics-printable-report table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+  }
+
+  #official-printable-report th,
+  #official-printable-report td,
+  #analytics-printable-report th,
+  #analytics-printable-report td {
+    border: 1px solid #1e293b !important;
+    padding: 3px 5px !important;
+    font-size: 10px !important;
+  }
+
+  #official-printable-report th,
+  #analytics-printable-report th {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    font-weight: 700 !important;
+  }
+
+  #official-printable-report tr,
+  #analytics-printable-report tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  /* 4b. Ensure full subject visibility in Report 4 when printing */
+  .report4-extra-subject {
+    display: block !important;
+  }
+
+  /* 4c. Center table header cells vertically and horizontally */
+  #analytics-printable-report thead th,
+  #official-printable-report thead th {
+    text-align: center !important;
+    vertical-align: middle !important;
+  }
+
+  /* 5. A4 Landscape page size */
+  @page {
+    size: A4 landscape;
+    margin: 8mm 8mm 10mm 8mm;
+  }
+}

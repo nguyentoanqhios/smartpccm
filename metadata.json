@@ -1,0 +1,8 @@
+{
+  "name": "PHÂN CÔNG CHUYÊN MÔN",
+  "description": "Hệ thống quản lý phân công chuyên môn thông minh",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

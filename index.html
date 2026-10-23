@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="author" content="Nguyentoanqh" />
+    <meta name="copyright" content="Nguyentoanqh" />
+    <title>Phân công chuyên môn</title>
+    <meta name="description" content="Hệ thống quản lý phân công chuyên môn, định mức tiết dạy, kiểm tra lỗi và lập báo cáo - Copyright Nguyentoanqh" />
+    <meta property="og:title" content="Phân công chuyên môn" />
+    <meta property="og:description" content="Hệ thống quản lý phân công chuyên môn, định mức tiết dạy, kiểm tra lỗi và lập báo cáo - Copyright Nguyentoanqh" />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#1e3a8a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PCCM THCS" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <script>
+      // Safe WebSocket patch for Vite client when running in iframe/proxy preview environments
+      (function() {
+        try {
+          var dummySocket = {
+            send: function() {},
+            close: function() {},
+            addEventListener: function() {},
+            removeEventListener: function() {},
+            readyState: 1
+          };
+          var OriginalWebSocket = window.WebSocket;
+          var PatchedWebSocket = function(url, protocols) {
+            try {
+              if (!OriginalWebSocket) return dummySocket;
+              var ws = protocols !== undefined ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
+              var origSend = ws.send;
+              ws.send = function(data) {
+                try {
+                  if (ws && ws.readyState === 1 && typeof origSend === 'function') {
+                    origSend.call(ws, data);
+                  }
+                } catch (err) {}
+              };
+              return ws;
+            } catch (e) {
+              return dummySocket;
+            }
+          };
+          if (OriginalWebSocket) {
+            PatchedWebSocket.prototype = OriginalWebSocket.prototype;
+          }
+          PatchedWebSocket.CONNECTING = 0;
+          PatchedWebSocket.OPEN = 1;
+          PatchedWebSocket.CLOSING = 2;
+          PatchedWebSocket.CLOSED = 3;
+          window.WebSocket = PatchedWebSocket;
+        } catch (e) {}
+
+        // Global onerror handler to suppress disabled Vite HMR/WebSocket errors per environment constraints
+        var oldOnError = window.onerror;
+        window.onerror = function(message, source, lineno, colno, error) {
+          var str = String(message || '') + String(source || '') + String(error || '');
+          if (str.indexOf('send') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('vite') !== -1) {
+            return true; // suppresses error
+          }
+          if (typeof oldOnError === 'function') {
+            return oldOnError.apply(this, arguments);
+          }
+          return false;
+        };
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var msg = event.reason && (event.reason.message || String(event.reason));
+          if (msg && (msg.indexOf('send') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite') !== -1)) {
+            event.preventDefault();
+          }
+        });
+        window.addEventListener('error', function(event) {
+          var msg = event.message || (event.error && event.error.message) || '';
+          if (msg && (msg.indexOf('send') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite') !== -1)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-50 text-slate-800 antialiased font-sans selection:bg-blue-600 selection:text-white min-h-screen">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
