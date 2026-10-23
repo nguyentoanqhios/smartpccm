@@ -53,16 +53,24 @@ export const SchoolBranchSetupModal: React.FC<SchoolBranchSetupModalProps> = ({
   const currentUser = dataStore.getCurrentUser();
   const isSuperAdmin = isSuperAdminEmail(currentUser?.email || '') || Boolean(currentUser?.isSuperAdmin);
   const currentLic = dataStore.getSchoolLicenseById(dataStore.getSchoolId());
-  const isSchoolNameLocked = !isSuperAdmin && Boolean(currentLic?.schoolName);
+  const effectiveSchoolName = (currentLic?.schoolName && currentLic.schoolName !== 'TRƯỜNG THCS MỚI')
+    ? currentLic.schoolName
+    : (currentSchool.schoolName && currentSchool.schoolName !== 'TRƯỜNG THCS MỚI')
+    ? currentSchool.schoolName
+    : (currentLic?.schoolName || currentSchool.schoolName || '');
+  const isSchoolNameLocked = !isSuperAdmin && Boolean(effectiveSchoolName);
   const licenseCheck = dataStore.checkSchoolLicense();
 
   // Form State: School Info
-  const [schoolName, setSchoolName] = useState<string>(() => {
-    if (isSchoolNameLocked && currentLic?.schoolName) {
-      return currentLic.schoolName;
+  const [schoolName, setSchoolName] = useState<string>(effectiveSchoolName);
+
+  React.useEffect(() => {
+    const sId = dataStore.getSchoolId();
+    const lic = dataStore.getSchoolLicenseById(sId);
+    if (lic?.schoolName && lic.schoolName !== 'TRƯỜNG THCS MỚI') {
+      setSchoolName(lic.schoolName);
     }
-    return currentSchool.schoolName || '';
-  });
+  }, []);
   const [authorityName, setAuthorityName] = useState<string>(() => {
     let auth = currentSchool.authorityName || '';
     if (auth.toUpperCase().includes('QUỲ HỢP') || auth.toUpperCase().includes('PHÒNG GIÁO DỤC') || auth.toUpperCase().includes('PHÒNG GD')) {
@@ -470,7 +478,7 @@ export const SchoolBranchSetupModal: React.FC<SchoolBranchSetupModalProps> = ({
                     <span className="font-mono text-slate-300">Mã trường: {currentLic?.id || dataStore.getSchoolId()}</span>
                   </div>
                   <h4 className="text-sm sm:text-base font-black text-white mt-0.5">
-                    {currentLic?.schoolName || schoolName}
+                    {(currentLic?.schoolName && currentLic.schoolName !== 'TRƯỜNG THCS MỚI') ? currentLic.schoolName : (schoolName || currentSchool.schoolName)}
                   </h4>
                   <div className="text-[11px] text-blue-200 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span>

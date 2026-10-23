@@ -117,14 +117,29 @@ export const isSuperAdminEmail = (email?: string | null): boolean => {
 
 export { isSystemSyncEmail };
 
-export const isThongKeSchool = (id?: string | null, name?: string | null): boolean => {
+export const isBlacklistedSchool = (id?: string | null, name?: string | null): boolean => {
   const normId = (id || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const normName = (name || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '');
-  return normId.includes('thongke') || normName.includes('thongke');
+  return (
+    normId.includes('thongke') ||
+    normName.includes('thongke') ||
+    normId.includes('thunghiem') ||
+    normName.includes('thunghiem') ||
+    normId.includes('thcs_thu_nghiem') ||
+    normId.includes('thcsthunghiem') ||
+    normId === 'school_thcs_thu_nghiem' ||
+    normId === 'school_thu_nghiem' ||
+    normId === 'thcs_thu_nghiem' ||
+    normId === 'thu_nghiem'
+  );
+};
+
+export const isThongKeSchool = (id?: string | null, name?: string | null): boolean => {
+  return isBlacklistedSchool(id, name);
 };
 
 export const INITIAL_USER_PROFILES: UserProfile[] = [
@@ -340,12 +355,42 @@ class DataStore {
         schoolId = this.detectUrlSchoolId();
       }
 
-      if (schoolId && isThongKeSchool(schoolId, schoolName || '')) {
-        schoolId = null;
+      let normalizedSchoolId = schoolId?.trim() || null;
+      if (normalizedSchoolId) {
+        normalizedSchoolId = normalizedSchoolId.toLowerCase();
+        if (!normalizedSchoolId.startsWith('school_') && normalizedSchoolId !== 'quyhop') {
+          normalizedSchoolId = `school_${normalizedSchoolId}`;
+        }
+      }
+
+      if (normalizedSchoolId && isThongKeSchool(normalizedSchoolId, schoolName || '')) {
+        normalizedSchoolId = null;
+      }
+
+      // Tự động khôi phục tên trường, email và mật khẩu từ bản lưu nếu URL ngắn không truyền đủ tham số
+      if (normalizedSchoolId && (!schoolName || schoolName === 'TRƯỜNG THCS MỚI')) {
+        try {
+          const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
+          const matched = backupLicenses.find(
+            (l) => l.id.toLowerCase() === normalizedSchoolId || l.id.replace(/^school_/, '').toLowerCase() === normalizedSchoolId?.replace(/^school_/, '')
+          );
+          if (matched && matched.schoolName && matched.schoolName !== 'TRƯỜNG THCS MỚI') {
+            schoolName = matched.schoolName;
+          }
+          if (!adminEmail && matched?.adminEmail) {
+            adminEmail = matched.adminEmail;
+          }
+          if (!adminName && matched?.adminName) {
+            adminName = matched.adminName;
+          }
+          if (!pass && matched?.assignedPasswordHint) {
+            pass = matched.assignedPasswordHint;
+          }
+        } catch {}
       }
 
       return {
-        schoolId: schoolId?.trim() || null,
+        schoolId: normalizedSchoolId,
         schoolName: schoolName?.trim() || null,
         adminEmail: adminEmail?.trim().toLowerCase() || null,
         adminName: adminName?.trim() || null,
@@ -691,13 +736,26 @@ class DataStore {
       this.saveLocalCacheOnly();
 
       const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
-      if (!deletedSchoolIds.includes('school_thongke')) {
-        deletedSchoolIds.push('school_thongke');
-      }
-      if (!deletedSchoolIds.includes('thongke')) {
-        deletedSchoolIds.push('thongke');
-      }
+      const BLACKLIST_SCHOOL_IDS = [
+        'school_thongke',
+        'thongke',
+        'school_thcs_thu_nghiem',
+        'thcs_thu_nghiem',
+        'school_thu_nghiem',
+        'thu_nghiem',
+      ];
+      BLACKLIST_SCHOOL_IDS.forEach((badId) => {
+        if (!deletedSchoolIds.includes(badId)) {
+          deletedSchoolIds.push(badId);
+        }
+      });
       this.setItem('pccm_deleted_school_ids', deletedSchoolIds);
+
+      // Xóa triệt để khỏi Cloud Firestore phòng khi còn lưu vết trên server
+      firestoreRepository.deleteSchoolLicense('school_thcs_thu_nghiem').catch(() => {});
+      firestoreRepository.deleteSchoolLicense('thcs_thu_nghiem').catch(() => {});
+      firestoreRepository.deleteSchoolLicense('school_thongke').catch(() => {});
+
       const cachedLicenses = (this.getItem(STORAGE_KEYS.SCHOOL_LICENSES, INITIAL_SCHOOL_LICENSES) as SchoolTenantLicense[]);
       const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
       const mergedMap = new Map<string, SchoolTenantLicense>();
@@ -715,23 +773,30 @@ class DataStore {
       if (urlSchoolId && urlSchoolId !== 'school_quyhop') {
         const existingLicIndex = this.schoolLicenses.findIndex((l) => l.id === urlSchoolId);
         if (existingLicIndex >= 0) {
-          if (urlParams.schoolName) this.schoolLicenses[existingLicIndex].schoolName = urlParams.schoolName;
+          if (urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI') {
+            this.schoolLicenses[existingLicIndex].schoolName = urlParams.schoolName;
+          }
           if (urlParams.adminEmail) this.schoolLicenses[existingLicIndex].adminEmail = urlParams.adminEmail;
           if (urlParams.adminName) this.schoolLicenses[existingLicIndex].adminName = urlParams.adminName;
           if (urlParams.pass) this.schoolLicenses[existingLicIndex].assignedPasswordHint = urlParams.pass;
         } else {
+          // Tìm trong backupLicenses trước để lấy tên chính xác
+          const foundBackup = backupLicenses.find((b) => b.id === urlSchoolId || b.id.replace(/^school_/, '') === urlSchoolId.replace(/^school_/, ''));
+          const targetName = (urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI')
+            ? urlParams.schoolName
+            : (foundBackup?.schoolName || 'TRƯỜNG THCS MỚI');
           const autoLic: SchoolTenantLicense = {
             id: urlSchoolId,
-            schoolName: urlParams.schoolName || 'TRƯỜNG THCS MỚI',
-            adminEmail: urlParams.adminEmail || '',
-            adminName: urlParams.adminName || `Quản trị viên ${urlParams.schoolName || ''}`.trim(),
-            assignedPasswordHint: urlParams.pass || undefined,
-            status: 'active',
-            planType: 'annual',
-            expiresAt: '2027-08-31T23:59:59.000Z',
-            contactPhone: '',
-            notes: 'Được tự động nạp từ liên kết chia sẻ trực tiếp',
-            createdAt: new Date().toISOString(),
+            schoolName: targetName,
+            adminEmail: urlParams.adminEmail || foundBackup?.adminEmail || '',
+            adminName: urlParams.adminName || foundBackup?.adminName || `Quản trị viên ${targetName}`.trim(),
+            assignedPasswordHint: urlParams.pass || foundBackup?.assignedPasswordHint || undefined,
+            status: foundBackup?.status || 'active',
+            planType: foundBackup?.planType || 'annual',
+            expiresAt: foundBackup?.expiresAt || '2027-08-31T23:59:59.000Z',
+            contactPhone: foundBackup?.contactPhone || '',
+            notes: foundBackup?.notes || 'Được tự động nạp từ liên kết chia sẻ trực tiếp',
+            createdAt: foundBackup?.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
           this.schoolLicenses.push(autoLic);
@@ -1168,10 +1233,16 @@ class DataStore {
     const lic = this.getSchoolLicenseById(this.currentSchoolId);
     const urlParams = this.detectUrlSchoolParams();
     let name = this.schoolInfo.schoolName;
-    if (lic && lic.schoolName) {
+    if (lic && lic.schoolName && lic.schoolName !== 'TRƯỜNG THCS MỚI') {
       name = lic.schoolName;
-    } else if (urlParams.schoolId === this.currentSchoolId && urlParams.schoolName) {
+      if (this.schoolInfo.schoolName !== lic.schoolName) {
+        this.schoolInfo.schoolName = lic.schoolName;
+      }
+    } else if (urlParams.schoolId === this.currentSchoolId && urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI') {
       name = urlParams.schoolName;
+      if (this.schoolInfo.schoolName !== urlParams.schoolName) {
+        this.schoolInfo.schoolName = urlParams.schoolName;
+      }
     } else if (!isQuyHop && (!name || name.toUpperCase().includes('QUỲ HỢP') || name.toUpperCase().includes('HIM LAM') || name.toUpperCase().includes('THỐNG KÊ'))) {
       name = 'TRƯỜNG THCS MỚI';
     }
@@ -1729,21 +1800,29 @@ class DataStore {
       });
 
       // 4. Đồng bộ thêm từ Cloud Firestore
+      // Luôn đảm bảo các trường thử nghiệm đã xóa không bao giờ còn sót lại trên Cloud
+      firestoreRepository.deleteSchoolLicense('school_thcs_thu_nghiem').catch(() => {});
+      firestoreRepository.deleteSchoolLicense('thcs_thu_nghiem').catch(() => {});
+      firestoreRepository.deleteSchoolLicense('school_thu_nghiem').catch(() => {});
+      firestoreRepository.deleteSchoolLicense('school_thongke').catch(() => {});
+
       if (cloudLicenses && cloudLicenses.length > 0) {
         cloudLicenses.forEach((cl) => {
-          if (isThongKeSchool(cl.id, cl.schoolName)) {
+          if (isThongKeSchool(cl.id, cl.schoolName) || deletedSchoolIds.includes(cl.id)) {
             // Xóa triệt để khỏi Cloud nếu còn tồn tại
             firestoreRepository.deleteSchoolLicense(cl.id).catch(() => {});
             return;
           }
-          if (!deletedSchoolIds.includes(cl.id)) {
-            const existing = map.get(cl.id);
-            map.set(cl.id, {
-              ...existing,
-              ...cl,
-              assignedPasswordHint: cl.assignedPasswordHint || existing?.assignedPasswordHint || '123456',
-            });
-          }
+          const existing = map.get(cl.id);
+          const effectiveName = (cl.schoolName && cl.schoolName !== 'TRƯỜNG THCS MỚI')
+            ? cl.schoolName
+            : (existing?.schoolName || cl.schoolName || 'TRƯỜNG THCS MỚI');
+          map.set(cl.id, {
+            ...existing,
+            ...cl,
+            schoolName: effectiveName,
+            assignedPasswordHint: cl.assignedPasswordHint || existing?.assignedPasswordHint || '',
+          });
         });
       }
 
@@ -1756,7 +1835,7 @@ class DataStore {
 
       // Đồng bộ ngay tên trường từ license hiện hành
       const curLic = this.getSchoolLicenseById(this.currentSchoolId);
-      if (curLic && curLic.schoolName) {
+      if (curLic && curLic.schoolName && curLic.schoolName !== 'TRƯỜNG THCS MỚI') {
         this.schoolInfo = {
           ...this.schoolInfo,
           schoolName: curLic.schoolName,
@@ -1805,13 +1884,17 @@ class DataStore {
           this.setItem('pccm_all_registered_school_licenses', backupLicenses);
         } catch {}
 
-        if ((this.currentSchoolId === schoolId || this.currentSchoolId === normId) && normId !== 'school_quyhop') {
-          this.schoolInfo = {
-            ...this.schoolInfo,
-            schoolName: cloudLic.schoolName,
-            email: cloudLic.adminEmail,
-            phone: cloudLic.contactPhone || this.schoolInfo.phone,
-          };
+        const curClean = (this.currentSchoolId || '').toLowerCase().replace(/^school_/, '');
+        const normClean = normId.toLowerCase().replace(/^school_/, '');
+        if ((curClean === normClean || this.currentSchoolId === schoolId || this.currentSchoolId === normId) && normId !== 'school_quyhop') {
+          if (cloudLic.schoolName && cloudLic.schoolName !== 'TRƯỜNG THCS MỚI') {
+            this.schoolInfo = {
+              ...this.schoolInfo,
+              schoolName: cloudLic.schoolName,
+              email: cloudLic.adminEmail || this.schoolInfo.email,
+              phone: cloudLic.contactPhone || this.schoolInfo.phone,
+            };
+          }
         }
 
         this.saveLocalCacheOnly();

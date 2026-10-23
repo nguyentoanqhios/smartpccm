@@ -118,13 +118,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
     const code = err?.code || '';
     if (code === 'auth/unauthorized-domain') {
       const hostname = typeof window !== 'undefined' ? window.location.hostname : 'smartpccm.vercel.app';
-      return `Tên miền website này (${hostname}) chưa được thêm vào mục "Authorized domains" trong Firebase Console (Authentication > Settings > Authorized domains). Quý Thầy/Cô vui lòng đăng nhập trực tiếp bằng Email & Mật khẩu (mặc định: 123456) để vào hệ thống ngay!`;
+      return `Tên miền website này (${hostname}) chưa được thêm vào mục "Authorized domains" trong Firebase Console (Authentication > Settings > Authorized domains). Quý Thầy/Cô vui lòng đăng nhập trực tiếp bằng Email & Mật khẩu do Ban Quản trị cấp để vào hệ thống ngay!`;
     }
     if (code === 'auth/popup-blocked') {
-      return 'Trình duyệt đã chặn cửa sổ pop-up đăng nhập Google. Quý Thầy/Cô vui lòng bấm cho phép mở pop-up trên thanh địa chỉ hoặc đăng nhập bằng Email và Mật khẩu (123456).';
+      return 'Trình duyệt đã chặn cửa sổ pop-up đăng nhập Google. Quý Thầy/Cô vui lòng bấm cho phép mở pop-up trên thanh địa chỉ hoặc đăng nhập bằng Email và Mật khẩu do Ban Quản trị cấp.';
     }
     if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-      return 'Email hoặc mật khẩu không chính xác. Mật khẩu mặc định hệ thống là 123456.';
+      return 'Email hoặc mật khẩu không chính xác. Vui lòng kiểm tra lại Email và Mật khẩu do Ban Quản trị cấp.';
     }
     if (code === 'auth/email-already-in-use') {
       return 'Email này đã được đăng ký tài khoản. Vui lòng chuyển sang tab Đăng nhập.';
@@ -323,26 +323,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
     if (isSuperAdmin) {
       isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
     } else if (targetLic && assignedPass) {
-      // Trường được cấp quyền riêng: Bắt buộc đúng mật khẩu được cấp (ví dụ: 123456789), TUYỆT ĐỐI không cho phép 123456
+      // Trường được cấp quyền riêng: Bắt buộc đúng mật khẩu được cấp
       isValidPass = password === assignedPass;
-      if (!isValidPass && password === '123456' && assignedPass !== '123456') {
+      if (!isValidPass) {
         setIsLoading(false);
         setErrorType('INVALID_CREDENTIAL');
-        setErrorMessage('Mật khẩu 123456 không chính xác! Đơn vị trường học này đã được cấp mật khẩu bảo mật riêng. Vui lòng nhập đúng mật khẩu do Ban Quản trị cấp.');
+        setErrorMessage('Mật khẩu không chính xác! Vui lòng nhập đúng email và mật khẩu do Ban Quản trị cấp.');
         return;
       }
     } else {
-      isValidPass = password === '123456';
+      isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
     }
 
     if (!isRegisterMode) {
       if (!isValidPass) {
         setErrorType('INVALID_CREDENTIAL');
-        setErrorMessage(
-          hasSpecificAssignedPass
-            ? 'Mật khẩu không chính xác! Đơn vị trường học này đã được cấp mật khẩu bảo mật riêng, vui lòng nhập đúng mật khẩu do Ban Quản trị cấp.'
-            : 'Mật khẩu không chính xác. Mật khẩu mặc định hệ thống là 123456 hoặc mật khẩu do Quản trị viên cấp.'
-        );
+        setErrorMessage('Mật khẩu không chính xác. Vui lòng nhập đúng email và mật khẩu do Ban Quản trị cấp.');
         setIsLoading(false);
         return;
       }
@@ -612,48 +608,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </button>
           </div>
 
-          {/* Quick Super Admin Login Preset - TUYỆT ĐỐI CHỈ HIỂN THỊ TRÊN CỔNG HỆ THỐNG GỐC, KHÔNG BAO GIỜ HIỆN TRÊN CỔNG TRƯỜNG ĐỐI TÁC */}
-          {!isRegisterMode && !isDedicatedSchoolLink && (schoolId === 'school_quyhop' || !schoolId) && (
-            <div className="mb-4 p-3 rounded-2xl bg-amber-50/90 border border-amber-200/90 text-xs shadow-2xs">
-              <div className="text-[11px] font-bold text-amber-900 mb-2 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                <span>Đăng nhập nhanh Quản trị viên Tối cao (Super Admin):</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail('nguyentoanqh@gmail.com');
-                    setPassword('123456');
-                    setSchoolId('school_quyhop');
-                    setSchoolName('TRƯỜNG THCS QUỲ HỢP');
-                    setErrorMessage(null);
-                    setSuccessMessage('Đã chọn Quản trị viên Tối cao: nguyentoanqh@gmail.com. Bấm "Đăng nhập hệ thống" bên dưới.');
-                  }}
-                  className="px-2.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] transition shadow-xs cursor-pointer flex items-center gap-1.5"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>👑 Thầy Toàn (Chính: nguyentoanqh)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail('nguyentoanqhios@gmail.com');
-                    setPassword('123456');
-                    setSchoolId('school_quyhop');
-                    setSchoolName('TRƯỜNG THCS QUỲ HỢP');
-                    setErrorMessage(null);
-                    setSuccessMessage('Đã chọn Quản trị viên Tối cao: nguyentoanqhios@gmail.com. Bấm "Đăng nhập hệ thống" bên dưới.');
-                  }}
-                  className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] transition shadow-xs cursor-pointer flex items-center gap-1.5"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>🛡️ Thầy Toàn (Dự phòng: nguyentoanqhios)</span>
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Error Message Alert */}
           {errorMessage && (
             <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex flex-col gap-2 animate-in fade-in">
@@ -769,7 +723,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         setSchoolName(found.schoolName);
                         if (!email || email.includes('admin.')) {
                           setEmail(found.adminEmail);
-                          setPassword(found.assignedPasswordHint || '123456');
+                          setPassword(found.assignedPasswordHint || '');
                         }
                       }
                     }}
@@ -862,7 +816,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
               {!isRegisterMode && (
                 <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
-                  <span>🔑 Mật khẩu ban đầu do Quản trị viên cấp (mặc định: 123456)</span>
+                  <span>🔑 Mật khẩu do Ban Quản trị cấp</span>
                 </p>
               )}
             </div>
@@ -941,7 +895,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
             {/* Note about Email/Password recommendation on custom domains */}
             <p className="text-[10.5px] text-slate-500 text-center leading-relaxed px-1">
-              💡 <strong>Khuyên dùng:</strong> Đăng nhập bằng Email & Mật khẩu bên trên (mật khẩu mặc định <strong>123456</strong> hoặc mật khẩu trường được cấp) luôn hoạt động 100% trên mọi tên miền.
+              💡 <strong>Khuyên dùng:</strong> Đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp luôn hoạt động 100% trên mọi tên miền.
             </p>
           </form>
 
