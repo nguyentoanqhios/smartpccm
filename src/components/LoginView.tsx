@@ -171,41 +171,62 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const isThongKe = isSameEmail(gEmail, 'thongke.qh@gmail.com');
       const isSuper = isSuperAdminEmail(gEmail);
 
-      // Kiểm tra email xem có khớp với adminEmail của bản quyền trường nào không
+      // 1. Kiểm tra email xem có khớp với adminEmail của bản quyền trường nào không
       const matchingLic = allLicenses.find((l) => isSameEmail(l.adminEmail, gEmail));
 
-      // Kiểm tra email có trong danh sách tài khoản người dùng đã tạo của trường
+      // 2. Kiểm tra email có trong danh sách tài khoản người dùng đã tạo của trường
       let profile = dataStore.getUsers().find((u) => isSameEmail(u.email, gEmail));
+
+      // 3. Kiểm tra email có trong danh bạ giáo viên của trường
+      const teacherMatch = dataStore.getTeachers().find((t) => isSameEmail(t.email, gEmail));
 
       // Xác định trường mục tiêu
       const targetSchool = matchingLic?.id || profile?.schoolId || schoolId || urlParams.schoolId || (isThongKe ? 'school_thongke' : 'school_quyhop');
+      const targetLic = matchingLic || dataStore.getSchoolLicenseById(targetSchool);
+
+      // KIỂM TRA BẢO MẬT BẮT BUỘC:
+      // Chỉ cho phép đăng nhập nếu tài khoản thuộc 1 trong các nhóm hợp lệ:
+      // - Super Admin (Thầy Toàn)
+      // - Quản trị viên được cấp phép của trường (matchingLic)
+      // - Tài khoản người dùng đã được tạo trong hệ thống (profile)
+      // - Giáo viên có trong danh bạ trường (teacherMatch)
+      const isAuthorized = isSuper || Boolean(matchingLic) || Boolean(profile) || Boolean(teacherMatch);
+
+      if (!isAuthorized) {
+        await signOut(auth).catch(() => {});
+        if (typeof window !== 'undefined') {
+          sessionStorage.clear();
+        }
+        setErrorMessage(
+          `Tài khoản Google (${gEmail}) chưa được cấp quyền truy cập vào ${targetLic?.schoolName || 'hệ thống'}. Quý Thầy/Cô vui lòng liên hệ Ban Giám hiệu / Quản trị viên để được thêm vào danh sách người dùng, hoặc đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp.`
+        );
+        setIsLoading(false);
+        return;
+      }
 
       // Tự động kiểm tra bản quyền trường nếu cần
-      const targetLic = matchingLic || dataStore.getSchoolLicenseById(targetSchool);
       if (targetLic && targetLic.status === 'locked' && !isSuper) {
+        await signOut(auth).catch(() => {});
         setErrorMessage(`Trường [${targetLic.schoolName}] đã bị tạm khóa: ${targetLic.lockedReason || 'Liên hệ quản trị viên'}.`);
         setIsLoading(false);
         return;
       }
 
-      // Kiểm tra quyền: Email phải là Super Admin, hoặc email bản quyền trường, hoặc có trong danh sách người dùng của trường
-      if (!isSuper && !matchingLic && !profile) {
-        if (isDedicatedSchoolLink || (targetSchool && targetSchool !== 'school_quyhop')) {
-          setErrorMessage(`Email (${gEmail}) chưa có trong danh sách tài khoản được cấp quyền của ${targetLic?.schoolName || 'nhà trường'}. Quý Thầy/Cô vui lòng liên hệ Quản trị viên để thêm email này vào danh sách người dùng, hoặc đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp.`);
-          setIsLoading(false);
-          return;
-        }
-      }
-
       if (!profile) {
+        const assignedRole = isSuper ? 'admin' : (matchingLic ? 'admin' : 'teacher');
+        const assignedPerm = (isSuper || matchingLic) ? 'edit' : 'view';
+        const assignedTitle = isSuper
+          ? 'Chủ sở hữu & Quản trị viên Tối cao'
+          : (matchingLic ? 'Quản trị viên trường' : 'Giáo viên bộ môn');
+
         profile = dataStore.addUser({
-          name: fbUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : isThongKe ? 'Quản trị viên THCS Thống Kê' : targetLic?.adminName || gEmail.split('@')[0]),
+          name: fbUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : targetLic?.adminName || gEmail.split('@')[0]),
           email: gEmail,
           authUid: fbUser.uid,
           schoolId: targetSchool,
-          role: 'admin',
-          roleTitle: isSuper ? 'Chủ sở hữu & Quản trị viên Tối cao' : isThongKe ? 'Quản trị viên THCS Thống Kê' : 'Quản trị viên trường',
-          permission: 'edit',
+          role: assignedRole,
+          roleTitle: assignedTitle,
+          permission: assignedPerm,
           isSuperAdmin: isSuper,
           status: 'active',
         });
@@ -214,7 +235,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           authUid: fbUser.uid,
           schoolId: targetSchool,
           status: 'active',
-          ...(isSuper ? { isSuperAdmin: true, roleTitle: 'Chủ sở hữu & Quản trị viên Tối cao' } : {}),
+          ...(isSuper ? { isSuperAdmin: true, roleTitle: 'Chủ sở hữu & Quản trị viên Tối cao', permission: 'edit', role: 'admin' } : {}),
         });
         profile = dataStore.getUserById(profile.id)!;
       }

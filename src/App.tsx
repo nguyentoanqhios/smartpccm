@@ -195,17 +195,44 @@ export default function App() {
       }
       setCurrentSchoolId(targetSchool);
 
-      // Tìm hoặc khởi tạo UserProfile khớp với tài khoản Google đang đăng nhập
+      // Kiểm tra tính hợp lệ & cấp phép của tài khoản Google
+      const allLics = dataStore.getSchoolLicenses();
+      const matchingLic = allLics.find((l) => isSameEmail(l.adminEmail, email));
       let profile = dataStore.getUsers().find((u) => isSameEmail(u.email, email));
+      const teacherMatch = dataStore.getTeachers().find((t) => isSameEmail(t.email, email));
+      const isAuthorized = isSuper || Boolean(matchingLic) || Boolean(profile) || Boolean(teacherMatch);
+
+      if (!isAuthorized) {
+        console.warn('Từ chối tài khoản Google chưa cấp quyền:', email);
+        signOut(auth).catch(() => {});
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('pccm_authenticated_session');
+          sessionStorage.removeItem(`pccm_session_auth_${targetSchool}`);
+          sessionStorage.removeItem('pccm_session_school_id');
+          sessionStorage.removeItem('pccm_session_user_email');
+          sessionStorage.removeItem('pccm_is_super_admin');
+        }
+        setFirebaseUser(null);
+        setIsAuthenticatedSession(false);
+        return;
+      }
+
+      // Tìm hoặc khởi tạo UserProfile khớp với tài khoản Google đang đăng nhập
       if (!profile) {
+        const assignedRole = isSuper ? 'admin' : (matchingLic ? 'admin' : 'teacher');
+        const assignedPerm = (isSuper || matchingLic) ? 'edit' : 'view';
+        const assignedTitle = isSuper
+          ? 'Chủ sở hữu & Quản trị viên Tối cao'
+          : (matchingLic ? 'Quản trị viên trường' : 'Giáo viên bộ môn');
+
         profile = dataStore.addUser({
           name: firebaseUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : currentLic?.adminName || email.split('@')[0]),
           email: email,
           authUid: firebaseUser.uid,
           schoolId: targetSchool,
-          role: 'admin',
-          roleTitle: isSuper ? 'Chủ sở hữu & Quản trị viên Tối cao' : 'Quản trị viên trường',
-          permission: 'edit',
+          role: assignedRole,
+          roleTitle: assignedTitle,
+          permission: assignedPerm,
           isSuperAdmin: isSuper,
           status: 'active',
         });
@@ -222,7 +249,7 @@ export default function App() {
             schoolId: targetSchool,
             status: 'active',
             isSuperAdmin: isSuper ? true : profile.isSuperAdmin,
-            permission: 'edit',
+            ...(isSuper ? { permission: 'edit', role: 'admin', roleTitle: 'Chủ sở hữu & Quản trị viên Tối cao' } : {}),
           });
           profile = dataStore.getUserById(profile.id) || profile;
         }
@@ -522,9 +549,18 @@ export default function App() {
       return false;
     }
 
-    // 1. Nếu đang có Google Firebase User (ở trường gốc Quỳ Hợp)
+    // 1. Nếu đang có Google Firebase User: Bắt buộc phải là tài khoản đã được cấp phép
     if (firebaseUser?.email) {
-      return true;
+      const email = firebaseUser.email;
+      const isSuper = isSuperAdminEmail(email);
+      const allLics = dataStore.getSchoolLicenses();
+      const matchingLic = allLics.find((l) => isSameEmail(l.adminEmail, email));
+      const hasUser = dataStore.getUsers().some((u) => isSameEmail(u.email, email));
+      const isTeacher = dataStore.getTeachers().some((t) => isSameEmail(t.email, email));
+      if (isSuper || matchingLic || hasUser || isTeacher) {
+        return true;
+      }
+      return false;
     }
 
     // 2. Nếu đã kích hoạt phiên xác thực thành công trong state
