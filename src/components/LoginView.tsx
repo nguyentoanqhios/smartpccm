@@ -164,22 +164,42 @@ export const LoginView: React.FC<LoginViewProps> = ({
         return;
       }
 
+      // Luôn đồng bộ danh sách license từ Cloud
+      await dataStore.loadLicensesFromCloud().catch(() => {});
+      const allLicenses = dataStore.getSchoolLicenses();
+
       const isThongKe = isSameEmail(gEmail, 'thongke.qh@gmail.com');
       const isSuper = isSuperAdminEmail(gEmail);
-      const targetSchool = schoolId || urlParams.schoolId || (isThongKe ? 'school_thongke' : 'school_quyhop');
+
+      // Kiểm tra email xem có khớp với adminEmail của bản quyền trường nào không
+      const matchingLic = allLicenses.find((l) => isSameEmail(l.adminEmail, gEmail));
+
+      // Kiểm tra email có trong danh sách tài khoản người dùng đã tạo của trường
+      let profile = dataStore.getUsers().find((u) => isSameEmail(u.email, gEmail));
+
+      // Xác định trường mục tiêu
+      const targetSchool = matchingLic?.id || profile?.schoolId || schoolId || urlParams.schoolId || (isThongKe ? 'school_thongke' : 'school_quyhop');
 
       // Tự động kiểm tra bản quyền trường nếu cần
-      const targetLic = dataStore.getSchoolLicenseById(targetSchool);
+      const targetLic = matchingLic || dataStore.getSchoolLicenseById(targetSchool);
       if (targetLic && targetLic.status === 'locked' && !isSuper) {
         setErrorMessage(`Trường [${targetLic.schoolName}] đã bị tạm khóa: ${targetLic.lockedReason || 'Liên hệ quản trị viên'}.`);
         setIsLoading(false);
         return;
       }
 
-      let profile = dataStore.getUsers().find((u) => isSameEmail(u.email, gEmail));
+      // Kiểm tra quyền: Email phải là Super Admin, hoặc email bản quyền trường, hoặc có trong danh sách người dùng của trường
+      if (!isSuper && !matchingLic && !profile) {
+        if (isDedicatedSchoolLink || (targetSchool && targetSchool !== 'school_quyhop')) {
+          setErrorMessage(`Email (${gEmail}) chưa có trong danh sách tài khoản được cấp quyền của ${targetLic?.schoolName || 'nhà trường'}. Quý Thầy/Cô vui lòng liên hệ Quản trị viên để thêm email này vào danh sách người dùng, hoặc đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp.`);
+          setIsLoading(false);
+          return;
+        }
+      }
+
       if (!profile) {
         profile = dataStore.addUser({
-          name: fbUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : isThongKe ? 'Quản trị viên THCS Thống Kê' : gEmail.split('@')[0]),
+          name: fbUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : isThongKe ? 'Quản trị viên THCS Thống Kê' : targetLic?.adminName || gEmail.split('@')[0]),
           email: gEmail,
           authUid: fbUser.uid,
           schoolId: targetSchool,
@@ -194,7 +214,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
           authUid: fbUser.uid,
           schoolId: targetSchool,
           status: 'active',
-          permission: 'edit',
           ...(isSuper ? { isSuperAdmin: true, roleTitle: 'Chủ sở hữu & Quản trị viên Tối cao' } : {}),
         });
         profile = dataStore.getUserById(profile.id)!;
@@ -664,10 +683,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-bold text-slate-700 uppercase">
-                    Đơn vị trường học (Bản quyền đã cấp)
+                    Đơn vị trường học
                   </label>
-                  <span className="text-[10px] text-amber-700 font-bold bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md flex items-center gap-1">
-                    <Lock className="w-3 h-3" /> Cố định theo bản quyền
+                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Đã cấp bản quyền
                   </span>
                 </div>
                 <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-slate-100 border border-slate-300 rounded-xl shadow-2xs text-xs font-bold text-slate-800 select-none">
@@ -678,12 +697,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Cổng trường riêng
                   </span>
                 </div>
-                {isRegisterMode && (
-                  <p className="mt-1.5 text-[11px] text-slate-500 italic flex items-center gap-1">
-                    <Lock className="w-3 h-3 text-amber-600 shrink-0" />
-                    <span>Tên trường được bảo vệ cố định. Tài khoản đăng ký mới sẽ tự động thuộc cơ sở dữ liệu riêng của <strong>{schoolName}</strong>.</span>
-                  </p>
-                )}
               </div>
             ) : isRegisterMode ? (
               <div>
@@ -893,9 +906,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <span>Đăng nhập với Google</span>
             </button>
 
-            {/* Note about Email/Password recommendation on custom domains */}
+            {/* Note about Email/Password login */}
             <p className="text-[10.5px] text-slate-500 text-center leading-relaxed px-1">
-              💡 <strong>Khuyên dùng:</strong> Đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp luôn hoạt động 100% trên mọi tên miền.
+              💡 Đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp.
             </p>
           </form>
 
