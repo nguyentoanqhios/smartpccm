@@ -153,6 +153,31 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     return () => unsubscribe();
   }, []);
 
+  // Lắng nghe phím ESC để thoát nhanh bất kỳ bảng thông báo / modal nào đang mở
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (handoverModalLicense) {
+          setHandoverModalLicense(null);
+        } else if (isAddModalOpen) {
+          setIsAddModalOpen(false);
+        } else if (editingLicense) {
+          setEditingLicense(null);
+        } else if (expiryModalLicense) {
+          setExpiryModalLicense(null);
+        } else if (deleteConfirmLicense) {
+          setDeleteConfirmLicense(null);
+        } else if (quickClassSchool) {
+          setQuickClassSchool(null);
+        } else if (quickTeacherSchool) {
+          setQuickTeacherSchool(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handoverModalLicense, isAddModalOpen, editingLicense, expiryModalLicense, deleteConfirmLicense, quickClassSchool, quickTeacherSchool]);
+
   // BẢN CẤP QUYỀN CHO TRƯỜNG HỌC: Chỉ hiển thị các trường đối tác được cấp quyền, KHÔNG hiển thị trường gốc Quỳ Hợp
   const partnerLicenses = useMemo(() => {
     return licenses.filter((l) => l.id !== 'school_quyhop');
@@ -712,6 +737,19 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            type="button"
+            onClick={() => {
+              const target = partnerLicenses[0] || licenses[0];
+              if (target) setHandoverModalLicense(target);
+            }}
+            className="flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-800 hover:from-blue-600 hover:to-indigo-700 text-white border-2 border-blue-300/80 px-4 py-2.5 rounded-xl text-xs font-black shadow-lg transition cursor-pointer hover:scale-[1.02] active:scale-95"
+            title="Xem hướng dẫn 4 bước đẩy mã nguồn lên GitHub và đồng bộ phát hành"
+          >
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>HƯỚNG DẪN 4 BƯỚC PHÁT HÀNH</span>
+          </button>
+
+          <button
             id="btn-push-all-school-configs-cloud"
             type="button"
             onClick={handlePushAllToCloud}
@@ -754,29 +792,6 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
             <Plus className="w-4 h-4" />
             <span>Cấp bản quyền trường mới</span>
           </button>
-        </div>
-      </div>
-
-      {/* THÔNG BÁO HỆ THỐNG VERCEL & CÁCH LY DỮ LIỆU */}
-      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 border border-blue-200 rounded-2xl p-4 text-xs text-slate-800 shadow-2xs space-y-2">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-black text-blue-950 text-xs sm:text-sm">
-            <ShieldCheck className="w-5 h-5 text-blue-700 shrink-0" />
-            <span>ĐỒNG BỘ PHIÊN BẢN ỨNG DỤNG & CẤU HÌNH BẢN QUYỀN (VERCEL + FIREBASE)</span>
-          </div>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 self-start sm:self-auto">
-            Dữ liệu từng trường cách ly 100%
-          </span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] text-slate-600 pt-1">
-          <div className="p-2.5 bg-white/80 rounded-xl border border-blue-100">
-            <strong className="text-blue-900 block mb-0.5">1. Đồng bộ code, tính năng & giao diện:</strong>
-            Khi triển khai lên Vercel, toàn bộ các trường đối tác tự động nhận phiên bản code mới nhất khi tải trang mà không cần can thiệp.
-          </div>
-          <div className="p-2.5 bg-white/80 rounded-xl border border-emerald-100">
-            <strong className="text-emerald-900 block mb-0.5">2. Đồng bộ cấu hình bản quyền:</strong>
-            Bấm nút <strong className="text-emerald-700">"ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG"</strong> ở trên để cập nhật danh sách trường, mật khẩu và hạn dùng lên Cloud. Dữ liệu giáo viên/lớp/phân công riêng của từng trường không bị ảnh hưởng.
-          </div>
         </div>
       </div>
 
@@ -1894,53 +1909,149 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
         </div>
       )}
 
-      {/* MODAL 4: HANDOVER PREVIEW */}
+      {/* MODAL 4: HANDOVER PREVIEW & HƯỚNG DẪN ĐỒNG BỘ 4 BƯỚC */}
       {handoverModalLicense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-amber-200 overflow-hidden">
-            <div className="bg-amber-50 p-5 border-b border-amber-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-amber-700" />
-                <h3 className="font-bold text-amber-950 text-base">Thông tin bàn giao bản quyền</h3>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-5 animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHandoverModalLicense(null);
+          }}
+        >
+          <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white p-4 sm:p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center text-amber-300 shadow-inner">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-white text-base sm:text-lg flex items-center gap-2">
+                    <span>Thông tin Bàn giao & Quy trình 4 Bước Phát hành</span>
+                  </h3>
+                  <p className="text-xs text-blue-200/90 font-medium">
+                    Đơn vị nhận bàn giao: <strong className="text-amber-300">{handoverModalLicense.schoolName}</strong>
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setHandoverModalLicense(null)}
-                className="text-amber-700 hover:text-amber-900 p-1"
+                className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                title="Đóng (phím Esc)"
               >
-                ✕
+                <span>✕</span>
+                <span className="hidden sm:inline text-[10px] bg-white/20 px-1.5 py-0.5 rounded font-mono">Esc</span>
               </button>
             </div>
 
-            <div className="p-5 space-y-3">
-              <p className="text-xs text-slate-600">
-                Bạn có thể sao chép toàn bộ nội dung bên dưới và gửi qua <strong>Zalo hoặc Email</strong> cho đại diện trường đối tác để họ đăng nhập sử dụng ngay:
-              </p>
-
-              {/* Chọn kiểu tên miền / URL chia sẻ */}
-              <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-3 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-amber-950 flex items-center gap-1.5">
-                    <Globe className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Máy chủ phát hành liên kết:</span>
-                  </span>
-                  <span className="text-[10px] text-amber-800 font-medium">
-                    (Mặc định là Link đang chạy để Thầy mở kiểm tra được ngay 100%)
+            {/* Content Scrollable */}
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
+              {/* QUY TRÌNH 4 BƯỚC PHÁT HÀNH */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3 shadow-2xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1 border-b border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-lg bg-blue-700 text-white flex items-center justify-center font-black text-xs shadow-xs">
+                      ⚡
+                    </span>
+                    <h4 className="font-extrabold text-slate-900 text-sm tracking-tight">
+                      HƯỚNG DẪN 4 BƯỚC CẬP NHẬT MÃ NGUỒN & PHÁT HÀNH CHO CÁC TRƯỜNG
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Bấm phím <kbd className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-mono text-[10px]">Esc</kbd> để thoát bảng
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+                  {/* Bước 1 */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 text-xs">
+                      <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-800 flex items-center justify-center text-[11px] font-black">1</span>
+                      <span>Tải mã nguồn (Tải code)</span>
+                    </div>
+                    <p className="text-slate-600 text-[11px] leading-relaxed">
+                      Trên giao diện Google AI Studio Build, bấm nút <strong>Download Code / Zip</strong> trên thanh công cụ góc trên để tải gói mã nguồn mới nhất về máy tính.
+                    </p>
+                  </div>
+
+                  {/* Bước 2 */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
+                    <div className="flex items-center justify-between font-bold text-slate-900 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-800 flex items-center justify-center text-[11px] font-black">2</span>
+                        <span>Tải lên GitHub (Up lên trang)</span>
+                      </div>
+                      <a
+                        href="https://github.com/nguyentoanqhios/smartpccm"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] text-blue-700 hover:text-blue-900 font-bold bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-200"
+                      >
+                        <span>Mở GitHub</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    <p className="text-slate-600 text-[11px] leading-relaxed">
+                      Truy cập repository: <a href="https://github.com/nguyentoanqhios/smartpccm" target="_blank" rel="noopener noreferrer" className="font-mono text-blue-700 font-semibold underline">https://github.com/nguyentoanqhios/smartpccm</a>, chọn <strong>Add file $\rightarrow$ Upload files</strong> và kéo thả các file mới vào.
+                    </p>
+                  </div>
+
+                  {/* Bước 3 */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 text-xs">
+                      <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-800 flex items-center justify-center text-[11px] font-black">3</span>
+                      <span>Xác nhận lưu (Bấm commit...)</span>
+                    </div>
+                    <p className="text-slate-600 text-[11px] leading-relaxed">
+                      Cuộn xuống cuối trang GitHub, nhập ghi chú cập nhật và bấm nút <strong>Commit changes</strong> (nhánh <code>main</code>). Nền tảng Vercel sẽ tự động build và cập nhật hệ thống ngay sau 1-2 phút!
+                    </p>
+                  </div>
+
+                  {/* Bước 4 */}
+                  <div className="bg-emerald-50/70 p-3.5 rounded-xl border-2 border-emerald-300 shadow-2xs space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-emerald-950 text-xs">
+                      <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px] font-black">4</span>
+                      <span>Đẩy đồng bộ cấu hình (Kèm nút bấm trực tiếp)</span>
+                    </div>
+                    <p className="text-emerald-900/90 text-[11px] leading-relaxed">
+                      Bấm nút bên dưới để đẩy ngay thông tin bản quyền trường học, tài khoản và hạn sử dụng lên Firebase Cloud:
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handlePushAllToCloud}
+                      disabled={isCloudSyncing}
+                      className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white py-2 px-3.5 rounded-xl text-xs font-black shadow-md transition cursor-pointer disabled:opacity-50 hover:scale-[1.01] active:scale-98"
+                    >
+                      <UploadCloud className={`w-4 h-4 text-amber-200 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
+                      <span>{isCloudSyncing ? 'Đang đẩy cấu hình Cloud...' : 'ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* LỰA CHỌN MÁY CHỦ PHÁT HÀNH LIÊN KẾT */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-blue-700" />
+                    <span>Máy chủ phát hành liên kết:</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Khuyến nghị dùng tên miền Vercel chính thức
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => {
                       updateCustomDomain('https://smartpccm.vercel.app');
                       updateDomainMode('CUSTOM');
                     }}
-                    className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                    className={`text-xs px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer flex items-center gap-1.5 ${
                       handoverDomainMode === 'CUSTOM' && handoverCustomDomain.includes('smartpccm.vercel.app')
                         ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
                         : 'bg-white text-blue-900 border-blue-300 hover:bg-blue-50'
                     }`}
-                    title="Dùng trực tiếp tên miền Vercel chính thức của Thầy: https://smartpccm.vercel.app để gửi trường khác"
                   >
                     <Globe className="w-3.5 h-3.5" />
                     <span>🌐 smartpccm.vercel.app (Vercel chính thức)</span>
@@ -1948,12 +2059,11 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                   <button
                     type="button"
                     onClick={() => updateDomainMode('CURRENT')}
-                    className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                    className={`text-xs px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer flex items-center gap-1.5 ${
                       handoverDomainMode === 'CURRENT'
                         ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
-                    title="Link đang chạy trực tiếp - Thầy mở tab mới là vào được ngay 100% không bị 404"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>🔗 Link Dev Đang chạy (Kiểm tra nội bộ)</span>
@@ -1961,40 +2071,17 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                   <button
                     type="button"
                     onClick={() => updateDomainMode('CUSTOM')}
-                    className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                    className={`text-xs px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer flex items-center gap-1.5 ${
                       handoverDomainMode === 'CUSTOM' && !handoverCustomDomain.includes('smartpccm.vercel.app')
                         ? 'bg-indigo-900 text-white border-indigo-900 shadow-xs'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
-                    title="Tên miền triển khai riêng khác (Cloudflare Pages / edu.vn)"
                   >
                     <span>✏️ Nhập Domain khác</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => updateDomainMode('PREVIEW')}
-                    className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
-                      handoverDomainMode === 'PREVIEW'
-                        ? 'bg-indigo-900 text-white border-indigo-900 shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                    }`}
-                    title="Chỉ dùng khi đã bấm nút Share/Deploy trên thanh AI Studio"
-                  >
-                    <span>☁️ AI Studio Preview (ais-pre)</span>
-                  </button>
                 </div>
-                <div className="text-[11px] p-3 rounded-xl border space-y-1.5 bg-amber-50/90 border-amber-300 text-amber-950">
-                  <p className="font-bold flex items-center gap-1.5 text-xs text-amber-900">
-                    <Info className="w-4 h-4 text-amber-700" />
-                    <span>Nguyên nhân lỗi 404 & Cách gửi link cho trường khác dùng được ngay:</span>
-                  </p>
-                  <ul className="list-disc list-inside space-y-1 text-slate-700 leading-relaxed text-[11px]">
-                    <li><strong>Vì sao link ais-pre bị lỗi 404 (Page not found)?</strong> Do Google Cloud Run chỉ kích hoạt link <code>ais-pre</code> khi Thầy bấm nút <strong>"Share"</strong> ở góc trên bên phải giao diện AI Studio. Nếu chưa bấm Share thì máy chủ Google sẽ báo lỗi 404.</li>
-                    <li><strong>Để Thầy tự kiểm tra đăng nhập ngay trên máy tính của Thầy:</strong> Giữ nguyên nút màu xanh <strong>"Link Đang chạy (Kiểm tra & Vào ngay)"</strong> và bấm nút <em>"Mở thử link này ngay"</em> ở bên dưới $\rightarrow$ Trình duyệt sẽ mở tab mới và nhận diện trường 100% không bao giờ bị lỗi 404!</li>
-                    <li><strong>Để gửi cho trường bạn dùng vĩnh viễn trên mọi thiết bị:</strong> Triển khai mã nguồn lên Vercel hoặc Cloudflare Pages (miễn phí 100%), sau đó chọn <strong>"Tự nhập Domain riêng"</strong> và điền địa chỉ web đó vào. Phần mềm sẽ tự động tạo link chuyên dụng gửi đối tác mở được ngay.</li>
-                  </ul>
-                </div>
-                {handoverDomainMode === 'CUSTOM' && (
+
+                {handoverDomainMode === 'CUSTOM' && !handoverCustomDomain.includes('smartpccm.vercel.app') && (
                   <div className="space-y-1 pt-1">
                     <label className="text-xs font-bold text-slate-700">Nhập địa chỉ Web / Tên miền công khai:</label>
                     <input
@@ -2002,48 +2089,57 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                       value={handoverCustomDomain}
                       onChange={(e) => updateCustomDomain(e.target.value)}
                       placeholder="VD: https://phancongchuyenmon.vercel.app hoặc https://pccm.pages.dev"
-                      className="w-full px-3 py-2 text-xs bg-white border border-amber-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                     />
                   </div>
                 )}
               </div>
 
-              <pre className="p-4 bg-slate-900 text-amber-300 rounded-2xl text-xs font-mono whitespace-pre-wrap leading-relaxed overflow-x-auto shadow-inner">
-                {getHandoverText(handoverModalLicense)}
-              </pre>
-
-              <div className="pt-2 flex items-center justify-between gap-2 flex-wrap">
-                <a
-                  href={getPublicSharedUrl(handoverModalLicense)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 transition"
-                  title="Mở thử link này trong tab mới để kiểm tra ngay"
-                >
-                  <ExternalLink className="w-4 h-4 text-emerald-700" />
-                  <span>Mở thử link này ngay</span>
-                </a>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setHandoverModalLicense(null)}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
-                  >
-                    Đóng
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(getHandoverText(handoverModalLicense));
-                      showToast('Đã sao chép toàn bộ thông tin bàn giao vào Clipboard!');
-                    }}
-                    className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 shadow-sm cursor-pointer"
-                  >
-                    <Copy className="w-4 h-4" />
-                    <span>Sao chép vào Clipboard</span>
-                  </button>
+              {/* NỘI DUNG VĂN BẢN BÀN GIAO */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-800">Nội dung thông tin bàn giao cho trường đối tác:</span>
+                  <span className="text-[11px] text-slate-500">Đã tự động đính kèm liên kết đăng nhập trực tiếp</span>
                 </div>
+                <pre className="p-4 bg-slate-900 text-amber-300 rounded-2xl text-xs font-mono whitespace-pre-wrap leading-relaxed overflow-x-auto shadow-inner border border-slate-800">
+                  {getHandoverText(handoverModalLicense)}
+                </pre>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 flex-wrap shrink-0">
+              <a
+                href={getPublicSharedUrl(handoverModalLicense)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 transition shadow-2xs"
+                title="Mở thử link này trong tab mới để kiểm tra ngay"
+              >
+                <ExternalLink className="w-4 h-4 text-emerald-700" />
+                <span>Mở thử link này ngay</span>
+              </a>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setHandoverModalLicense(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200 transition flex items-center gap-1"
+                >
+                  <span>Đóng</span>
+                  <span className="text-[10px] text-slate-400 font-mono">(Esc)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(getHandoverText(handoverModalLicense));
+                    showToast('Đã sao chép toàn bộ thông tin bàn giao vào Clipboard!');
+                  }}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 shadow-md cursor-pointer transition active:scale-95"
+                >
+                  <Copy className="w-4 h-4" />
+                  <span>Sao chép vào Clipboard</span>
+                </button>
               </div>
             </div>
           </div>

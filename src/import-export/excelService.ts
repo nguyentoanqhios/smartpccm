@@ -1988,8 +1988,6 @@ export async function exportComprehensiveInitialSetupTemplate(customSchoolInfo?:
     [4, 'THU_KY', 'Thư ký hội đồng trường', 'Kiêm nhiệm', 2, 'Cố định', 'Tính 2 tiết/tuần'],
     [5, 'PHU_TRACH_DOI', 'Tổng phụ trách Đội', 'Kiêm nhiệm', 6, 'Cố định', 'Tính theo trường hạng I/II/III'],
     [6, 'CON_MON', 'Nuôi con nhỏ dưới 12 tháng', 'Miễn giảm', 2, 'Cố định', 'Giảm 2 tiết/tuần'],
-    [7, 'NGHI_SINH', 'Nghỉ chế độ thai sản', 'Miễn giảm', 19, 'Cố định', 'Miễn đủ 19 tiết định mức'],
-    [8, 'PHO_HT', 'Phó Hiệu trưởng', 'Miễn giảm', 15, 'Cố định', 'Định mức dạy 4 tiết, miễn giảm 15 tiết'],
   ];
   sampleDuties.forEach((r) => wsDuties.addRow(r));
   styleDataRows(wsDuties);

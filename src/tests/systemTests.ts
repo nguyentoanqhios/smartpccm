@@ -199,22 +199,22 @@ export function runAllSystemTests(): TestCaseResult[] {
   });
 
   // ---------------------------------------------------------------------------------
-  // TEST 5: Phó hiệu trưởng dạy 4 tiết và miễn 15 tiết -> ĐỦ
+  // TEST 5: Phó hiệu trưởng dạy 4 tiết (định mức chuẩn 4 tiết/tuần) -> ĐỦ
   // ---------------------------------------------------------------------------------
-  const teacherMinh: Teacher = { id: 't_minh', code: 'GV002', fullName: 'Trần Văn Minh', departmentId: 'd_toan', status: 'VICE_PRINCIPAL', standardQuota: 19, subjectsCanTeach: ['s_toan'] };
+  const teacherMinh: Teacher = { id: 't_minh', code: 'GV002', fullName: 'Trần Văn Minh', departmentId: 'd_toan', status: 'VICE_PRINCIPAL', standardQuota: 4, subjectsCanTeach: ['s_toan'] };
   const assignmentsMinh: TeachingAssignment[] = [
     { id: 'as_m1', schoolYearId: 'sy_2026_2027', semesterId: 'HK1', versionId: 'v1', teacherId: teacherMinh.id, departmentId: 'd_toan', type: 'TEACHING', subjectId: subToan.id, classId: class6A9.id, session: 'MORNING', periodsPerWeek: 4, weeks: 18, totalPeriods: 72, status: 'approved', createdBy: 'BGH', createdAt: new Date().toISOString() },
   ];
   const calcMinh = calculateTeacherWorkload(teacherMinh, assignmentsMinh, duties, deptMap, 18);
-  const test5Passed = calcMinh.resultStatus === 'EXACT' && calcMinh.totalCalculated === 19 && calcMinh.morningPeriods === 4 && calcMinh.exemptionPeriods === 15;
+  const test5Passed = (calcMinh.resultStatus === 'EXACT' || calcMinh.resultStatus === 'EXACT_EXEMPT') && calcMinh.totalCalculated === 4 && calcMinh.morningPeriods === 4;
 
   results.push({
     id: 5,
     name: 'Tính toán định mức Phó hiệu trưởng',
-    description: 'Phó hiệu trưởng dạy 4 tiết Toán + 15 tiết miễn giảm -> ĐỦ (19/19)',
+    description: 'Phó hiệu trưởng dạy 4 tiết Toán (định mức chuẩn 4 tiết/tuần) -> ĐỦ (4/4)',
     passed: test5Passed,
-    expectedResult: 'Kết quả: EXACT (ĐỦ), Tổng tính: 19',
-    actualResult: `Kết quả: ${calcMinh.resultStatus}, Dạy: ${calcMinh.morningPeriods}, Miễn: ${calcMinh.exemptionPeriods}, Tổng tính: ${calcMinh.totalCalculated}`,
+    expectedResult: 'Kết quả: EXACT (ĐỦ), Định mức: 4, Dạy: 4',
+    actualResult: `Kết quả: ${calcMinh.resultStatus}, Dạy: ${calcMinh.morningPeriods}, Định mức: ${calcMinh.standardQuota}, Tổng tính: ${calcMinh.totalCalculated}`,
   });
 
   // ---------------------------------------------------------------------------------

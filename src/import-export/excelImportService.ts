@@ -2110,6 +2110,23 @@ export async function importComprehensiveInitialSetupWorkbook(
       const name = getCellStr(row, nameCol);
       if (!name) continue;
       const code = getCellStr(row, codeCol) || `DUTY_${r - startRow + 1}`;
+      const normName = name.toLowerCase();
+      const upperCode = code.toUpperCase();
+      // Bỏ hoàn toàn nhiệm vụ miễn tiết mặc định cho HT, PHT và Nghỉ sinh
+      if (
+        upperCode === 'HIEU_TRUONG' ||
+        upperCode === 'PHO_HIEU_TRUONG' ||
+        upperCode === 'PHO_HT' ||
+        upperCode === 'HT' ||
+        upperCode === 'NGHI_SINH' ||
+        upperCode === 'THAI_SAN' ||
+        normName.includes('hiệu trưởng') ||
+        normName.includes('phó hiệu') ||
+        normName.includes('nghỉ sinh') ||
+        normName.includes('thai sản')
+      ) {
+        continue;
+      }
       const typeStr = normalizeStr(getCellStr(row, typeCol));
       const isExempt = typeStr.includes('mien') || typeStr.includes('giam');
       const p = getCellNum(row, periodsCol, 2);

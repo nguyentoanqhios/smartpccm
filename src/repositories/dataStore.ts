@@ -115,6 +115,44 @@ export const isSuperAdminEmail = (email?: string | null): boolean => {
   return isSameEmail(email, 'nguyentoanqh@gmail.com') || isSameEmail(email, 'nguyentoanqhios@gmail.com') || isSameEmail(email, 'nguyentoanqhai@gmail.com');
 };
 
+export const isForbiddenDutyOrExemption = (d?: { code?: string; name?: string; id?: string; type?: string; dutyName?: string; dutyId?: string } | null): boolean => {
+  if (!d) return false;
+  const rawName = d.name || d.dutyName || '';
+  const normName = rawName.toLowerCase().trim();
+  const rawCode = d.code || d.dutyId || '';
+  const code = rawCode.toUpperCase().trim();
+  const id = (d.id || d.dutyId || '').toLowerCase().trim();
+
+  if (
+    code === 'HIEU_TRUONG' ||
+    code === 'PHO_HIEU_TRUONG' ||
+    code === 'PHO_HT' ||
+    code === 'HT' ||
+    code === 'NGHI_SINH' ||
+    code === 'THAI_SAN' ||
+    code === 'MATERNITY' ||
+    id.startsWith('duty_hieu_truong') ||
+    id.startsWith('duty_pho_hieu_truong') ||
+    id.startsWith('duty_pho_ht') ||
+    id.startsWith('duty_nghi_sinh') ||
+    id.startsWith('duty_thai_san') ||
+    id.startsWith('duty_ht')
+  ) {
+    return true;
+  }
+
+  if (
+    normName.includes('hiệu trưởng') ||
+    normName.includes('phó hiệu') ||
+    normName.includes('nghỉ sinh') ||
+    normName.includes('thai sản')
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 export { isSystemSyncEmail };
 
 export const isBlacklistedSchool = (id?: string | null, _name?: string | null): boolean => {
@@ -590,7 +628,35 @@ class DataStore {
         const fullName = d.fullName || initMatch?.fullName || (dName.startsWith('Tổ ') ? dName : `Tổ ${dName}`);
         return { ...d, name: dName, fullName, schoolId: d.schoolId || 'school_quyhop' };
       });
-      this.duties = this.getItem(STORAGE_KEYS.DUTIES, INITIAL_DUTIES);
+      this.duties = this.getItem(STORAGE_KEYS.DUTIES, INITIAL_DUTIES).filter((d: SpecialDuty) => !isForbiddenDutyOrExemption(d));
+      this.setItem(STORAGE_KEYS.DUTIES, this.duties);
+
+      // Quét dọn triệt để mọi key pccm_duties trong localStorage của mọi trường / tenant
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (k && (k === STORAGE_KEYS.DUTIES || k.includes('pccm_duties'))) {
+              const raw = window.localStorage.getItem(k);
+              if (raw) {
+                try {
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed)) {
+                    const cleaned = parsed.filter((d: any) => !isForbiddenDutyOrExemption(d));
+                    if (cleaned.length !== parsed.length) {
+                      window.localStorage.setItem(k, JSON.stringify(cleaned));
+                    }
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
       const rawClasses = this.getItem<SchoolClass[]>(STORAGE_KEYS.CLASSES, []);
       this.classes = Array.isArray(rawClasses) ? rawClasses : [];
       this.subjects = this.getItem(STORAGE_KEYS.SUBJECTS, INITIAL_SUBJECTS);
@@ -992,6 +1058,9 @@ class DataStore {
       });
     }
 
+    // Bỏ hoàn toàn nhiệm vụ miễn tiết mặc định cho Hiệu trưởng, Phó hiệu trưởng và Nghỉ sinh theo yêu cầu
+    this.duties = this.duties.filter((d) => !isForbiddenDutyOrExemption(d));
+
     // 4. Đồng bộ Năm học & Phiên bản
     if (!this.schoolYears || this.schoolYears.length === 0) {
       this.schoolYears = [...INITIAL_SCHOOL_YEARS];
@@ -1118,7 +1187,10 @@ class DataStore {
       this.curriculum = (loadedCurriculum && loadedCurriculum.length > 0)
         ? loadedCurriculum
         : [...INITIAL_CURRICULUM];
-      this.duties = this.getItem(this.getScopedKey(STORAGE_KEYS.DUTIES, schoolId), INITIAL_DUTIES);
+      const loadedDuties = this.getItem(this.getScopedKey(STORAGE_KEYS.DUTIES, schoolId), INITIAL_DUTIES);
+      this.duties = (Array.isArray(loadedDuties) ? loadedDuties : [...INITIAL_DUTIES]).filter((d: SpecialDuty) => !isForbiddenDutyOrExemption(d));
+      this.setItem(this.getScopedKey(STORAGE_KEYS.DUTIES, schoolId), this.duties);
+      this.assignments = this.assignments.filter((a) => !isForbiddenDutyOrExemption(a));
       this.versions = this.getItem(this.getScopedKey(STORAGE_KEYS.VERSIONS, schoolId), INITIAL_VERSIONS);
       this.cleanOrphanedAssignments();
       this.isTenantDataLoaded = true;
@@ -3855,7 +3927,7 @@ class DataStore {
   }
 
   public getDuties(): SpecialDuty[] {
-    return [...this.duties];
+    return this.duties.filter((d) => !isForbiddenDutyOrExemption(d));
   }
 
   public getClasses(includeDeleted = false): SchoolClass[] {
@@ -7564,6 +7636,9 @@ class DataStore {
   }
 
   public addDuty(item: Omit<SpecialDuty, 'id'>): SpecialDuty {
+    if (isForbiddenDutyOrExemption(item)) {
+      throw new Error('Nhiệm vụ này đã được cấu hình cố định trong hồ sơ nhân sự, không dùng kiêm nhiệm / miễn giảm.');
+    }
     const newDuty: SpecialDuty = {
       id: `duty_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       ...item,
@@ -7579,9 +7654,10 @@ class DataStore {
   }
 
   public bulkAddDuties(items: Omit<SpecialDuty, 'id'>[]): SpecialDuty[] {
+    const validItems = items.filter((item) => !isForbiddenDutyOrExemption(item));
     const created: SpecialDuty[] = [];
     const timestamp = Date.now();
-    items.forEach((item, i) => {
+    validItems.forEach((item, i) => {
       const newDuty: SpecialDuty = {
         id: `duty_${timestamp}_${i}_${Math.random().toString(36).substring(2, 5)}`,
         ...item,

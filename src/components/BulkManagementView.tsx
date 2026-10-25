@@ -1552,6 +1552,35 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
     showToast(`Đã xóa nhiệm vụ "${name}" khỏi danh mục!`);
   };
 
+  // Lọc bỏ triệt để mọi nhiệm vụ / tiết miễn mặc định cho Hiệu trưởng, Phó hiệu trưởng và Nghỉ sinh trong mục Kiêm nhiệm
+  const isExcludedDuty = (d: { code?: string; name?: string; id?: string }) => {
+    const normName = (d.name || '').toLowerCase().trim();
+    const code = (d.code || '').toUpperCase().trim();
+    const id = (d.id || '').toLowerCase().trim();
+    return (
+      code === 'HIEU_TRUONG' ||
+      code === 'PHO_HIEU_TRUONG' ||
+      code === 'PHO_HT' ||
+      code === 'HT' ||
+      code === 'NGHI_SINH' ||
+      code === 'THAI_SAN' ||
+      code === 'MATERNITY' ||
+      id.startsWith('duty_hieu_truong') ||
+      id.startsWith('duty_pho_hieu_truong') ||
+      id.startsWith('duty_pho_ht') ||
+      id.startsWith('duty_nghi_sinh') ||
+      id.startsWith('duty_thai_san') ||
+      normName.includes('hiệu trưởng') ||
+      normName.includes('phó hiệu') ||
+      normName.includes('nghỉ sinh') ||
+      normName.includes('thai sản')
+    );
+  };
+
+  const activeDuties = useMemo(() => {
+    return (duties || []).filter((d) => !isExcludedDuty(d));
+  }, [duties]);
+
   const currentVersionDutyAssignments = useMemo(() => {
     return assignments.filter(
       (a) =>
@@ -1559,7 +1588,8 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
         a.semesterId === semesterId &&
         a.versionId === versionId &&
         !a.isDeleted &&
-        (a.type === 'CONCURRENT' || a.type === 'OTHER' || !!a.dutyId || !!a.dutyName)
+        (a.type === 'CONCURRENT' || a.type === 'OTHER' || !!a.dutyId || !!a.dutyName) &&
+        !isExcludedDuty({ code: a.dutyId, name: a.dutyName, id: a.dutyId })
     );
   }, [assignments, schoolYearId, semesterId, versionId]);
 
@@ -1605,15 +1635,12 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
     { code: 'TRUONG_BAN_TTND', name: 'Trưởng ban Thanh tra nhân dân', type: 'CONCURRENT', periodsPerWeekCalculated: 2, periodsPerWeekExempted: 0, applicationMode: 'FIXED', notes: 'Giảm định mức 2 tiết/tuần' },
     { code: 'THIET_BI_THI_NGHIEM', name: 'Phụ trách phòng Thiết bị / Thí nghiệm', type: 'CONCURRENT', periodsPerWeekCalculated: 3, periodsPerWeekExempted: 0, applicationMode: 'FIXED', notes: 'Giảm định mức 3 tiết/tuần' },
     { code: 'TAP_SU', name: 'Giáo viên tập sự (Giảm 2 tiết)', type: 'EXEMPTION', periodsPerWeekCalculated: 0, periodsPerWeekExempted: 2, applicationMode: 'FIXED', notes: 'Định mức 17 tiết (Giảm 2 tiết)' },
-    { code: 'THAI_SAN', name: 'Nghỉ chế độ thai sản (Miễn 19 tiết)', type: 'EXEMPTION', periodsPerWeekCalculated: 0, periodsPerWeekExempted: 19, applicationMode: 'BY_TERM', notes: 'Miễn toàn bộ 19 tiết/tuần' },
-    { code: 'HIEU_TRUONG', name: 'Hiệu trưởng (Miễn 17 tiết, dạy 2 tiết)', type: 'EXEMPTION', periodsPerWeekCalculated: 0, periodsPerWeekExempted: 17, applicationMode: 'FIXED', notes: 'Định mức dạy 2 tiết/tuần' },
-    { code: 'PHO_HIEU_TRUONG', name: 'Phó Hiệu trưởng (Miễn 15 tiết, dạy 4 tiết)', type: 'EXEMPTION', periodsPerWeekCalculated: 0, periodsPerWeekExempted: 15, applicationMode: 'FIXED', notes: 'Định mức dạy 4 tiết/tuần' },
   ];
 
   const handleApplyStandardDuties = () => {
     const toAdd: Omit<SpecialDuty, 'id'>[] = [];
     STANDARD_DUTIES_CATALOG.forEach((d) => {
-      if (!duties.some((dt) => dt.code.toLowerCase() === d.code.toLowerCase())) {
+      if (!activeDuties.some((dt) => dt.code.toLowerCase() === d.code.toLowerCase())) {
         toAdd.push(d);
       }
     });
@@ -1960,7 +1987,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
             { id: 'SUBJECTS', label: 'Môn học', icon: BookOpen, count: subjects.length },
             { id: 'DEPARTMENTS', label: 'Tổ bộ môn', icon: Building2, count: departments.length },
             { id: 'TEACHERS', label: 'Giáo viên', icon: Users, count: activeTeachers.length },
-            { id: 'DUTIES', label: 'Kiêm nhiệm', icon: Award, count: duties.length },
+            { id: 'DUTIES', label: 'Kiêm nhiệm', icon: Award, count: activeDuties.length },
             { id: 'ABBREVIATIONS', label: 'Danh mục viết tắt', icon: Sliders, count: dataStore.getAbbreviationRules().length },
             { id: 'VERSIONS', label: 'Phiên bản', icon: Layers, count: currentSemesterVersions.length, highlight: true },
             { id: 'EXCEL', label: 'Excel', icon: FileSpreadsheet, count: 'Xlsx', highlight: true },
@@ -4520,7 +4547,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   </button>
                 </div>
               <p className="text-xs text-slate-600">
-                Tự động nạp: Chủ nhiệm (4 tiết), Tổ trưởng (3 tiết), Tổ phó (1 tiết), Tổng phụ trách (17 tiết), TTND (2 tiết), Tập sự (giảm 2), Thai sản (miễn 19), BGH...
+                Tự động nạp: Chủ nhiệm (4 tiết), Tổ trưởng (3 tiết), Tổ phó (1 tiết), Tổng phụ trách (17 tiết), TTND (2 tiết), Thiết bị thí nghiệm (3 tiết), Tập sự (giảm 2 tiết)...
               </p>
               <button
                 type="button"
@@ -4546,7 +4573,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                     onChange={(e) => setAssignDutyId(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-lg p-1.5 font-bold"
                   >
-                    {duties.map((d) => (
+                    {activeDuties.map((d) => (
                       <option key={d.id} value={d.id}>
                         {d.name} ({d.periodsPerWeekCalculated ? `+${d.periodsPerWeekCalculated} tiết` : `-${d.periodsPerWeekExempted} tiết`})
                       </option>
@@ -4556,7 +4583,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
 
                 {/* Hiện danh sách GV đang được gán nhiệm vụ này */}
                 {(() => {
-                  const targetD = duties.find((d) => d.id === assignDutyId);
+                  const targetD = activeDuties.find((d) => d.id === assignDutyId);
                   if (!targetD) return null;
                   const currentlyAssigned = currentVersionDutyAssignments.filter(
                     (a) =>
@@ -4776,7 +4803,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    Danh mục nhiệm vụ ({duties.length})
+                    Danh mục nhiệm vụ ({activeDuties.length})
                   </button>
                   <button
                     type="button"
@@ -4806,17 +4833,17 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
 
                   <button
                     onClick={() => {
-                      if (selectedDutyIds.length === duties.length) setSelectedDutyIds([]);
-                      else setSelectedDutyIds(duties.map((d) => d.id));
+                      if (selectedDutyIds.length === activeDuties.length) setSelectedDutyIds([]);
+                      else setSelectedDutyIds(activeDuties.map((d) => d.id));
                     }}
                     className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-700 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
                   >
-                    {selectedDutyIds.length === duties.length && duties.length > 0 ? (
+                    {selectedDutyIds.length === activeDuties.length && activeDuties.length > 0 ? (
                       <CheckSquare className="w-4 h-4 text-blue-700" />
                     ) : (
                       <Square className="w-4 h-4 text-slate-400" />
                     )}
-                    <span>Chọn tất cả ({selectedDutyIds.length}/{duties.length})</span>
+                    <span>Chọn tất cả ({selectedDutyIds.length}/{activeDuties.length})</span>
                   </button>
 
                   {selectedDutyIds.length > 0 && (
@@ -4941,7 +4968,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {duties.map((d) => {
+                    {activeDuties.map((d) => {
                       const isSelected = selectedDutyIds.includes(d.id);
                       const isHead = dataStore.isHeadDepartmentDuty(d.id, d.name, d.code);
                       const isDep = dataStore.isDeputyDepartmentDuty(d.id, d.name, d.code);

@@ -492,7 +492,7 @@ export const AbbreviationManagementView: React.FC<AbbreviationManagementViewProp
                   type="button"
                   onClick={() =>
                     setTestInput(
-                      'Phó hiệu trưởng (miễn 15 tiết/tuần = 270 tiết); Nghỉ sinh (miễn 19 tiết/tuần)'
+                      'Tổ trưởng chuyên môn (3 tiết/tuần); Thư ký hội đồng (2 tiết/tuần); Chủ nhiệm 9A1'
                     )
                   }
                   className="text-[10px] text-blue-600 hover:underline cursor-pointer"

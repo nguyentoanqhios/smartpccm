@@ -735,66 +735,6 @@ export const Layout: React.FC<LayoutProps> = ({
                             title={`Trạng thái: ${cloudStatus}`}
                           />
                         </button>
-
-                        <button
-                          type="button"
-                          id="menu-sync-licenses-quick-btn"
-                          onClick={async () => {
-                            setIsUserMenuOpen(false);
-                            toastService.info('Đang đẩy đồng bộ cấu hình cho các trường lên Cloud...');
-                            try {
-                              const res = await dataStore.syncAllLicensesToCloud();
-                              if (res.success) {
-                                toastService.success(res.message || 'Đã đồng bộ cấu hình các trường lên Cloud!');
-                              } else {
-                                toastService.error(res.message || 'Lỗi khi đẩy cấu hình lên Cloud');
-                              }
-                            } catch (e: any) {
-                              toastService.error(e?.message || 'Lỗi đồng bộ cấu hình');
-                            }
-                          }}
-                          className="w-full text-left px-3 py-2 text-xs flex items-center justify-between text-emerald-950 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition cursor-pointer font-black border border-emerald-300 shadow-2xs"
-                          title="Đẩy đồng bộ ngay lập tức cấu hình bản quyền các trường học lên Cloud Firestore (Vercel)"
-                        >
-                          <div className="flex items-center gap-2">
-                            <UploadCloud className="w-4 h-4 text-emerald-700 shrink-0" />
-                            <span className="font-extrabold text-[11px] tracking-tight text-emerald-950">
-                              ĐỒNG BỘ CẤU HÌNH CÁC TRƯỜNG
-                            </span>
-                          </div>
-                          <span className="text-[9px] bg-emerald-200 text-emerald-900 px-1.5 py-0.5 rounded-md font-bold uppercase">
-                            Push
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          id="menu-publish-system-schema-btn"
-                          onClick={async () => {
-                            setIsUserMenuOpen(false);
-                            if (window.confirm('Bạn có chắc chắn muốn đẩy Cấu trúc hệ thống mẫu (Khung môn học, phân phối số tiết, danh mục kiêm nhiệm, quy tắc viết tắt) lên Cloud cho TẤT CẢ các trường được cấp quyền tải về?')) {
-                              toastService.info('Đang phát hành cấu trúc hệ thống lên Cloud...');
-                              const res = await dataStore.publishSystemSchemaToCloud();
-                              if (res.success) {
-                                toastService.success(res.message);
-                              } else {
-                                toastService.error(res.message);
-                              }
-                            }
-                          }}
-                          className="w-full text-left px-3 py-2 text-xs flex items-center justify-between text-indigo-950 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition cursor-pointer font-black border border-indigo-300 shadow-2xs"
-                          title="Đẩy mẫu khung môn học, số tiết và danh mục chuẩn lên Cloud cho các trường tải về"
-                        >
-                          <div className="flex items-center gap-2">
-                            <Layers className="w-4 h-4 text-indigo-700 shrink-0" />
-                            <span className="font-extrabold text-[11px] tracking-tight text-indigo-950">
-                              ĐẨY CẤU TRÚC HỆ THỐNG
-                            </span>
-                          </div>
-                          <span className="text-[9px] bg-indigo-200 text-indigo-900 px-1.5 py-0.5 rounded-md font-bold uppercase">
-                            Push Schema
-                          </span>
-                        </button>
                       </div>
                     )}
 
