@@ -376,11 +376,21 @@ export class FirestoreRepository {
       onError?.({ code: 'resource-exhausted', message: 'Quota exceeded' });
       return () => {};
     }
-    let unsub: Unsubscribe = () => {};
+    let unsubHandle: Unsubscribe | null = null;
     let isTerminated = false;
+    const cancelSubscription = () => {
+      isTerminated = true;
+      if (unsubHandle) {
+        try {
+          unsubHandle();
+        } catch {}
+        unsubHandle = null;
+      }
+    };
+
     try {
       const colRef = this.getSubCollectionRef(schoolId, subCollection);
-      unsub = onSnapshot(
+      const activeUnsub = onSnapshot(
         colRef,
         (snapshot) => {
           if (isTerminated) return;
@@ -389,11 +399,11 @@ export class FirestoreRepository {
         },
         (error) => {
           if (isQuotaExhaustedError(error)) {
-            isTerminated = true;
             markQuotaExceeded();
-            try {
-              unsub();
-            } catch {}
+            cancelSubscription();
+            queueMicrotask(() => {
+              cancelSubscription();
+            });
             onError?.(error);
             return;
           }
@@ -401,12 +411,13 @@ export class FirestoreRepository {
           onError?.(error);
         }
       );
-      return () => {
-        isTerminated = true;
+      unsubHandle = activeUnsub;
+      if (isTerminated) {
         try {
-          unsub();
+          activeUnsub();
         } catch {}
-      };
+      }
+      return cancelSubscription;
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
         markQuotaExceeded();
@@ -430,11 +441,21 @@ export class FirestoreRepository {
       onError?.({ code: 'resource-exhausted', message: 'Quota exceeded' });
       return () => {};
     }
-    let unsub: Unsubscribe = () => {};
+    let unsubHandle: Unsubscribe | null = null;
     let isTerminated = false;
+    const cancelSubscription = () => {
+      isTerminated = true;
+      if (unsubHandle) {
+        try {
+          unsubHandle();
+        } catch {}
+        unsubHandle = null;
+      }
+    };
+
     try {
       const docRef = this.getSubDocRef(schoolId, subCollection, docId);
-      unsub = onSnapshot(
+      const activeUnsub = onSnapshot(
         docRef,
         (snapshot) => {
           if (isTerminated) return;
@@ -446,11 +467,11 @@ export class FirestoreRepository {
         },
         (error) => {
           if (isQuotaExhaustedError(error)) {
-            isTerminated = true;
             markQuotaExceeded();
-            try {
-              unsub();
-            } catch {}
+            cancelSubscription();
+            queueMicrotask(() => {
+              cancelSubscription();
+            });
             onError?.(error);
             return;
           }
@@ -458,12 +479,13 @@ export class FirestoreRepository {
           onError?.(error);
         }
       );
-      return () => {
-        isTerminated = true;
+      unsubHandle = activeUnsub;
+      if (isTerminated) {
         try {
-          unsub();
+          activeUnsub();
         } catch {}
-      };
+      }
+      return cancelSubscription;
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
         markQuotaExceeded();
@@ -821,10 +843,20 @@ export class FirestoreRepository {
     ensureFirebaseAuth().catch(() => {});
     const sId = sanitizeFirestoreDocId(schoolId || 'school_quyhop');
     const licRef = doc(db, 'licenses', sId);
-    let unsub: Unsubscribe = () => {};
+    let unsubHandle: Unsubscribe | null = null;
     let isTerminated = false;
+    const cancelSubscription = () => {
+      isTerminated = true;
+      if (unsubHandle) {
+        try {
+          unsubHandle();
+        } catch {}
+        unsubHandle = null;
+      }
+    };
+
     try {
-      unsub = onSnapshot(
+      const activeUnsub = onSnapshot(
         licRef,
         (docSnap) => {
           if (isTerminated) return;
@@ -836,11 +868,11 @@ export class FirestoreRepository {
         },
         (error) => {
           if (isQuotaExhaustedError(error)) {
-            isTerminated = true;
             markQuotaExceeded();
-            try {
-              unsub();
-            } catch {}
+            cancelSubscription();
+            queueMicrotask(() => {
+              cancelSubscription();
+            });
             onError?.(error);
             return;
           }
@@ -848,12 +880,13 @@ export class FirestoreRepository {
           onError?.(error);
         }
       );
-      return () => {
-        isTerminated = true;
+      unsubHandle = activeUnsub;
+      if (isTerminated) {
         try {
-          unsub();
+          activeUnsub();
         } catch {}
-      };
+      }
+      return cancelSubscription;
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
         markQuotaExceeded();
@@ -876,10 +909,20 @@ export class FirestoreRepository {
     }
     ensureFirebaseAuth().catch(() => {});
     const colRef = collection(db, 'licenses');
-    let unsub: Unsubscribe = () => {};
+    let unsubHandle: Unsubscribe | null = null;
     let isTerminated = false;
+    const cancelSubscription = () => {
+      isTerminated = true;
+      if (unsubHandle) {
+        try {
+          unsubHandle();
+        } catch {}
+        unsubHandle = null;
+      }
+    };
+
     try {
-      unsub = onSnapshot(
+      const activeUnsub = onSnapshot(
         colRef,
         (snapshot) => {
           if (isTerminated) return;
@@ -891,11 +934,11 @@ export class FirestoreRepository {
         },
         (error) => {
           if (isQuotaExhaustedError(error)) {
-            isTerminated = true;
             markQuotaExceeded();
-            try {
-              unsub();
-            } catch {}
+            cancelSubscription();
+            queueMicrotask(() => {
+              cancelSubscription();
+            });
             onError?.(error);
             return;
           }
@@ -903,12 +946,13 @@ export class FirestoreRepository {
           onError?.(error);
         }
       );
-      return () => {
-        isTerminated = true;
+      unsubHandle = activeUnsub;
+      if (isTerminated) {
         try {
-          unsub();
+          activeUnsub();
         } catch {}
-      };
+      }
+      return cancelSubscription;
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
         markQuotaExceeded();

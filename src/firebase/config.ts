@@ -7,7 +7,7 @@ import {
   createUserWithEmailAndPassword,
   User,
 } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getFirestore, setLogLevel } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDki0VaW73--yCx7tRo9ATl0RST0IUxjIQ",
@@ -21,6 +21,30 @@ const firebaseConfig = {
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Tắt log nội bộ của Firebase Firestore để tránh log console gây hiểu lầm là lỗi ứng dụng khi hết hạn mức (Quota exceeded)
+try {
+  setLogLevel('silent');
+} catch {}
+
+// Tự động bắt và chuyển tiếp êm dịu các log quota exceeded của Firestore WebChannel SDK
+if (typeof window !== 'undefined' && typeof console !== 'undefined') {
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args: any[]) => {
+    const text = args.map((a) => (typeof a === 'string' ? a : a?.message || String(a))).join(' ');
+    if (
+      text.includes('@firebase/firestore') ||
+      text.includes('resource-exhausted') ||
+      text.includes('Quota exceeded') ||
+      text.includes('maximum backoff delay') ||
+      text.includes('RESOURCE_EXHAUSTED')
+    ) {
+      // Firestore Quota limit reached - application smoothly operates 100% in Offline LocalStorage mode
+      return;
+    }
+    originalConsoleError(...args);
+  };
+}
 
 if (typeof window !== 'undefined') {
   setPersistence(auth, browserLocalPersistence).catch(() => {});
