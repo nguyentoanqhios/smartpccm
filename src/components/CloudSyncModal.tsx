@@ -38,7 +38,7 @@ import { dataStore, isSuperAdminEmail } from '../repositories/dataStore';
 import { firestoreRepository } from '../repositories/firestoreRepository';
 import { cloudflareTenantService, CloudflareTenantSyncPayload } from '../services/cloudflareTenantService';
 import { CLOUDFLARE_WORKER_CODE } from '../services/cloudflareWorkerCode';
-import { auth, ensureFirebaseAuth } from '../firebase/config';
+import { auth, ensureFirebaseAuth, withTimeout } from '../firebase/config';
 
 interface CloudSyncModalProps {
   isOpen: boolean;
@@ -262,8 +262,11 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
     setOperationResult(null);
 
     try {
-      await ensureFirebaseAuth();
-      const res = await dataStore.syncAllLicensesToCloud();
+      const res = await withTimeout(
+        dataStore.syncAllLicensesToCloud(),
+        14000,
+        'Quá thời gian kết nối Cloud Firestore (14s). Vui lòng thử lại.'
+      );
       if (res.success) {
         setOperationResult({
           type: 'push',
@@ -271,7 +274,7 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
           message: `ĐÃ ĐỒNG BỘ THÀNH CÔNG CẤU HÌNH CHO CÁC TRƯỜNG: Đã đẩy ${res.count} trường bản quyền lên Cloud Firestore (Vercel). Các trường đối tác có thể truy cập hệ thống ngay lập tức với phiên bản mới nhất! (Dữ liệu nội bộ riêng của từng trường được bảo vệ 100%, không bị ghi đè).`,
           timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         });
-        await loadTenantsList();
+        await loadTenantsList().catch(() => {});
       } else {
         setOperationResult({
           type: 'push',
@@ -297,15 +300,18 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
     const lic = dataStore.getSchoolLicenseById(targetTenantId);
     if (!lic) return;
     try {
-      await ensureFirebaseAuth();
-      await firestoreRepository.saveSchoolLicense(lic);
+      await withTimeout(
+        firestoreRepository.saveSchoolLicense(lic),
+        8000,
+        'Quá thời gian đẩy cấu hình trường lên Cloud (8s).'
+      );
       setOperationResult({
         type: 'push',
         success: true,
         message: `Đã đẩy thành công cấu hình & bản quyền của trường [${lic.schoolName}] lên Cloud Firestore!`,
         timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       });
-      await loadTenantsList();
+      await loadTenantsList().catch(() => {});
     } catch (err: any) {
       setOperationResult({
         type: 'push',

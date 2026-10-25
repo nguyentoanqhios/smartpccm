@@ -66,14 +66,37 @@ export const isSystemSyncEmail = (email?: string | null): boolean => {
   );
 };
 
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMsg: string = 'Quá thời gian kết nối (Timeout)'
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutMsg));
+    }, timeoutMs);
+
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 let ongoingAuthPromise: Promise<User | null> | null = null;
 
 /**
  * Đảm bảo luôn có phiên xác thực hợp lệ trên Firebase Authentication
  * Tránh lỗi bảo mật "Missing or insufficient permissions" khi đọc/ghi Cloud Firestore
  * CHỈ CHẠY THEO YÊU CẦU (on-demand) khi thao tác với Firestore, không chiếm quyền người dùng.
+ * Có timeout bảo vệ để không bao giờ treo ứng dụng nếu mạng chậm hoặc Auth bị chặn.
  */
-export async function ensureFirebaseAuth(): Promise<User | null> {
+export async function ensureFirebaseAuth(timeoutMs: number = 4000): Promise<User | null> {
   // Nếu đã có phiên đăng nhập (người dùng thật hoặc tài khoản sync), dùng luôn
   if (auth.currentUser) {
     return auth.currentUser;
@@ -90,16 +113,24 @@ export async function ensureFirebaseAuth(): Promise<User | null> {
         } catch {}
       }
 
-      // Thử đăng nhập lần lượt các tài khoản đồng bộ đã cấp quyền
+      // Thử đăng nhập lần lượt các tài khoản đồng bộ đã cấp quyền với timeout ngắn
       for (const cred of SYNC_CREDENTIALS) {
         try {
-          const res = await signInWithEmailAndPassword(auth, cred.email, cred.pass);
+          const res = await withTimeout(
+            signInWithEmailAndPassword(auth, cred.email, cred.pass),
+            Math.min(timeoutMs, 3000),
+            'Xác thực đăng nhập đồng bộ quá thời gian chờ'
+          );
           return res.user;
         } catch (signInErr: any) {
           // Nếu tài khoản chưa tồn tại thì thử tạo mới
           if (signInErr?.code === 'auth/user-not-found') {
             try {
-              const resCreate = await createUserWithEmailAndPassword(auth, cred.email, cred.pass);
+              const resCreate = await withTimeout(
+                createUserWithEmailAndPassword(auth, cred.email, cred.pass),
+                Math.min(timeoutMs, 3000),
+                'Tạo tài khoản đồng bộ quá thời gian chờ'
+              );
               return resCreate.user;
             } catch {}
           }
@@ -115,7 +146,12 @@ export async function ensureFirebaseAuth(): Promise<User | null> {
     }
   })();
 
-  return ongoingAuthPromise;
+  try {
+    return await withTimeout(ongoingAuthPromise, timeoutMs + 1000, 'Xác thực tài khoản đồng bộ quá thời gian');
+  } catch {
+    return auth.currentUser;
+  }
 }
+
 
 

@@ -19,7 +19,7 @@ import {
   disableNetwork,
   enableNetwork,
 } from 'firebase/firestore';
-import { db, auth, ensureFirebaseAuth } from '../firebase/config';
+import { db, auth, ensureFirebaseAuth, withTimeout } from '../firebase/config';
 import {
   SchoolInfo,
   Teacher,
@@ -712,8 +712,11 @@ export class FirestoreRepository {
     if (!license || !license.id) return;
     if (isQuotaExceeded()) return;
     try {
-      if (!auth.currentUser) await ensureFirebaseAuth();
+      await withTimeout(ensureFirebaseAuth(), 4000, 'Xác thực tài khoản đồng bộ quá hạn').catch(() => {});
       const sId = sanitizeFirestoreDocId(license.id);
+      
+      const batch = writeBatch(db);
+
       // 1. Lưu vào collection licenses/{sId}
       const licRef = doc(db, 'licenses', sId);
       const sanitized = sanitizeForFirestore({
@@ -722,11 +725,11 @@ export class FirestoreRepository {
         assignedPasswordHint: license.assignedPasswordHint?.trim() || (sId === 'school_quyhop' ? '123456' : ''),
         updatedAt: new Date().toISOString(),
       });
-      await setDoc(licRef, sanitized, { merge: true });
+      batch.set(licRef, sanitized, { merge: true });
 
       // 2. Cập nhật root school doc schools/{sId}
       const schoolRootRef = this.getSchoolDocRef(sId);
-      await setDoc(
+      batch.set(
         schoolRootRef,
         sanitizeForFirestore({
           id: sId,
@@ -740,12 +743,79 @@ export class FirestoreRepository {
         }),
         { merge: true }
       );
+
+      await withTimeout(batch.commit(), 7000, 'Ghi cấu hình bản quyền lên Cloud quá thời gian chờ (7s)');
     } catch (error: any) {
       if (isQuotaExhaustedError(error)) {
         markQuotaExceeded();
         return;
       }
       console.warn('Firestore saveSchoolLicense notice:', error?.message || error);
+    }
+  }
+
+  /**
+   * Đẩy siêu tốc toàn bộ danh sách bản quyền các trường học lên Cloud Firestore bằng Batch Write.
+   * Gộp tất cả các thao tác ghi vào 1 request duy nhất thay vì lặp tuần tự, kèm timeout chống treo tuyệt đối.
+   */
+  public async batchSaveSchoolLicenses(licenses: SchoolTenantLicense[]): Promise<number> {
+    if (!licenses || licenses.length === 0) return 0;
+    if (isQuotaExceeded()) return 0;
+    try {
+      await withTimeout(ensureFirebaseAuth(), 4000, 'Xác thực tài khoản đồng bộ quá hạn').catch(() => {});
+
+      // Mỗi trường gồm 2 documents (licenses/{sId} và schools/{sId}), Firestore cho phép tối đa 500 ops / batch
+      const CHUNK_SIZE = 200;
+      let totalSaved = 0;
+
+      for (let i = 0; i < licenses.length; i += CHUNK_SIZE) {
+        const chunk = licenses.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+
+        for (const lic of chunk) {
+          if (!lic || !lic.id) continue;
+          const sId = sanitizeFirestoreDocId(lic.id);
+
+          const licRef = doc(db, 'licenses', sId);
+          const sanitizedLic = sanitizeForFirestore({
+            ...lic,
+            id: sId,
+            assignedPasswordHint: lic.assignedPasswordHint?.trim() || (sId === 'school_quyhop' ? '123456' : ''),
+            updatedAt: new Date().toISOString(),
+          });
+          batch.set(licRef, sanitizedLic, { merge: true });
+
+          const schoolRootRef = this.getSchoolDocRef(sId);
+          const sanitizedRoot = sanitizeForFirestore({
+            id: sId,
+            schoolName: lic.schoolName,
+            adminEmail: lic.adminEmail,
+            status: lic.status,
+            expiresAt: lic.expiresAt,
+            lockedReason: lic.lockedReason || null,
+            planType: lic.planType,
+            updatedAt: new Date().toISOString(),
+          });
+          batch.set(schoolRootRef, sanitizedRoot, { merge: true });
+
+          totalSaved++;
+        }
+
+        await withTimeout(
+          batch.commit(),
+          8000,
+          'Ghi đồng bộ cấu hình các trường học lên Cloud Firestore quá thời gian chờ (8s)'
+        );
+      }
+
+      return totalSaved;
+    } catch (err: any) {
+      if (isQuotaExhaustedError(err)) {
+        markQuotaExceeded();
+        return 0;
+      }
+      console.warn('Lỗi batchSaveSchoolLicenses:', err?.message || err);
+      throw err;
     }
   }
 

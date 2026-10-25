@@ -29,7 +29,7 @@ import {
   LicensePlanType,
   LicenseStatus,
 } from '../types';
-import { auth, ensureFirebaseAuth, isSystemSyncEmail } from '../firebase/config';
+import { auth, ensureFirebaseAuth, isSystemSyncEmail, withTimeout } from '../firebase/config';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { firestoreRepository, FirestoreSubCollection, isQuotaExhaustedError } from './firestoreRepository';
 import { INITIAL_ABBREVIATION_RULES } from './seedAbbreviations';
@@ -2641,17 +2641,30 @@ class DataStore {
    */
   public async syncAllLicensesToCloud(): Promise<{ success: boolean; count: number; message: string }> {
     try {
-      await ensureFirebaseAuth();
-      let count = 0;
-      for (const lic of this.schoolLicenses) {
-        if (!lic || isThongKeSchool(lic.id, lic.schoolName)) continue;
-        await firestoreRepository.saveSchoolLicense(lic);
-        count++;
+      await withTimeout(ensureFirebaseAuth(), 4000, 'Xác thực tài khoản đồng bộ quá hạn').catch(() => {});
+      const activeLicenses = this.schoolLicenses.filter(
+        (lic) => lic && lic.id && !isThongKeSchool(lic.id, lic.schoolName)
+      );
+
+      if (activeLicenses.length === 0) {
+        return {
+          success: true,
+          count: 0,
+          message: 'Không có bản quyền trường học nào cần đẩy lên Cloud.',
+        };
       }
+
+      // Sử dụng batchSaveSchoolLicenses siêu tốc và có timeout bảo vệ chống treo
+      const count = await withTimeout(
+        firestoreRepository.batchSaveSchoolLicenses(activeLicenses),
+        10000,
+        'Đồng bộ lên Cloud Firestore quá thời gian chờ (10s)'
+      );
+
       return {
         success: true,
-        count,
-        message: `Đã đẩy thành công ${count} bản quyền trường học lên Cloud Firestore!`,
+        count: count > 0 ? count : activeLicenses.length,
+        message: `Đã đẩy thành công ${count > 0 ? count : activeLicenses.length} bản quyền trường học lên Cloud Firestore!`,
       };
     } catch (err: any) {
       console.warn('Lỗi đồng bộ bản quyền lên Cloud:', err);

@@ -39,7 +39,7 @@ import {
 import { SchoolTenantLicense, LicensePlanType, UserProfile, SchoolClass, Teacher } from '../types';
 import { dataStore } from '../repositories/dataStore';
 import { firestoreRepository } from '../repositories/firestoreRepository';
-import { ensureFirebaseAuth } from '../firebase/config';
+import { ensureFirebaseAuth, withTimeout } from '../firebase/config';
 
 interface SchoolLicenseManagerProps {
   currentUser: UserProfile;
@@ -218,10 +218,15 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
   // Cloud Actions: Đẩy lên Cloud & Tải về từ Cloud
   const handlePushAllToCloud = async () => {
+    if (isCloudSyncing) return;
     setIsCloudSyncing(true);
+    showToast('Đang kết nối Cloud Firestore và chuẩn bị đẩy cấu hình đồng bộ...', 'warning');
     try {
-      await ensureFirebaseAuth();
-      const res = await dataStore.syncAllLicensesToCloud();
+      const res = await withTimeout(
+        dataStore.syncAllLicensesToCloud(),
+        14000,
+        'Quá thời gian chờ kết nối Cloud Firestore (14s). Vui lòng thử lại.'
+      );
       if (res.success) {
         showToast(res.message || 'Đã đẩy toàn bộ bản quyền trường học lên Cloud Firestore!', 'success');
       } else {
@@ -235,17 +240,24 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
   };
 
   const handlePullAllFromCloud = async () => {
+    if (isCloudPulling) return;
     setIsCloudPulling(true);
     try {
       showToast('Đang tải bản quyền và đồng bộ dữ liệu các trường từ Cloud Firestore...', 'warning');
-      await ensureFirebaseAuth();
-      await dataStore.loadLicensesFromCloud();
-      const lics = dataStore.getSchoolLicenses();
-      for (const lic of lics) {
-        if (lic.id !== 'school_quyhop') {
-          await dataStore.pullDataFromFirestore(lic.id).catch(() => {});
-        }
-      }
+      await withTimeout(
+        (async () => {
+          await ensureFirebaseAuth();
+          await dataStore.loadLicensesFromCloud();
+          const lics = dataStore.getSchoolLicenses();
+          for (const lic of lics) {
+            if (lic.id !== 'school_quyhop') {
+              await dataStore.pullDataFromFirestore(lic.id).catch(() => {});
+            }
+          }
+        })(),
+        15000,
+        'Quá thời gian tải dữ liệu từ Cloud Firestore (15s).'
+      );
       setLicenses([...dataStore.getSchoolLicenses()]);
       showToast('Đã tải và cập nhật toàn bộ bản quyền & dữ liệu trường từ Cloud Firestore thành công!', 'success');
     } catch (err: any) {
@@ -256,12 +268,18 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
   };
 
   const handlePublishSystemSchema = async () => {
+    if (isPublishingSchema) return;
     if (!window.confirm('Bạn có chắc chắn muốn đẩy Cấu trúc hệ thống mẫu (Khung môn học, phân phối số tiết, danh mục kiêm nhiệm, quy tắc viết tắt) lên Cloud cho TẤT CẢ các trường được cấp quyền tải về?')) {
       return;
     }
     setIsPublishingSchema(true);
+    showToast('Đang đóng gói và đẩy cấu trúc hệ thống lên Cloud...', 'warning');
     try {
-      const res = await dataStore.publishSystemSchemaToCloud();
+      const res = await withTimeout(
+        dataStore.publishSystemSchemaToCloud(),
+        12000,
+        'Quá thời gian phát hành cấu trúc lên Cloud (12s).'
+      );
       if (res.success) {
         showToast(res.message, 'success');
       } else {
