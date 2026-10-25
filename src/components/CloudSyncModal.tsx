@@ -538,6 +538,18 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
                 </div>
               </div>
 
+              {firestoreRepository.hasQuotaExhausted() && (
+                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-3 text-xs text-amber-950">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-amber-900 text-sm">Cơ chế bảo vệ: Đạt hạn mức Cloud Firestore trong ngày</div>
+                    <p className="mt-1 leading-relaxed text-[11px] text-amber-800">
+                      Tài khoản Firebase miễn phí đã đạt giới hạn đọc/ghi trong ngày (50.000 lượt). Hệ thống đã tự động kích hoạt <strong>Chế độ Offline-first</strong>: ngắt các luồng tải nền để chống nghẽn và lưu toàn bộ dữ liệu an toàn trên bộ nhớ máy (LocalStorage). Mọi thao tác phân công, sửa đổi của Thầy vẫn hoạt động trơn tru 100%!
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Data Statistics Cards */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-center">
