@@ -127,6 +127,15 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
   // Dynamic School Branches
   const branches = dataStore.getBranches();
 
+  const uniqueSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    return subjects.filter((s) => {
+      if (!s || !s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+  }, [subjects]);
+
   // View Mode: TABLE (Bảng chi tiết), CARDS (Danh sách thẻ), GROUPED_TEACHER (Gom nhóm theo Giáo viên)
   const [viewMode, setViewMode] = useState<'TABLE' | 'CARDS' | 'GROUPED_TEACHER'>(() => {
     return (localStorage.getItem('assignment_view_mode') as 'TABLE' | 'CARDS' | 'GROUPED_TEACHER') || 'TABLE';
@@ -2713,7 +2722,7 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600"
                     required
                   >
-                    {subjects.map((s) => (
+                    {uniqueSubjects.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name} ({s.code}) {s.isIntegrated ? '– Môn tích hợp' : ''}
                       </option>

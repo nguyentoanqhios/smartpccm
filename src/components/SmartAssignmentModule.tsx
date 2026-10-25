@@ -76,7 +76,7 @@ import { exportWorkloadExcel } from '../import-export/excelService';
 import { getSmartTeacherSuggestions, TeacherSuggestion } from '../utils/teacherSuggestionEngine';
 import { SearchableTeacherSelect } from './SearchableTeacherSelect';
 import { matchesQuery, matchesTeacherFullName, removeVietnameseTones } from '../utils/searchUtils';
-import { getTeacherPositions } from '../utils/teacherPositions';
+import { getTeacherPositions, normalizePositionName } from '../utils/teacherPositions';
 import { TeachingPlanFrameworkModal } from './TeachingPlanFrameworkModal';
 
 export interface SmartAssignmentModuleProps {
@@ -961,7 +961,7 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
     const existing = localAssignments.some(
       (a) =>
         a.teacherId === currentSelectedTeacher.id &&
-        a.type === 'CONCURRENT' &&
+        (a.type === 'CONCURRENT' || a.type === 'EXEMPTION' || a.type === 'CONCURRENT_DUTY') &&
         a.dutyId === duty.id &&
         (!appliedClassId || a.classId === appliedClassId)
     );
@@ -972,7 +972,7 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
     }
 
     pushHistory(localAssignments);
-    const periods = customPeriods !== undefined ? customPeriods : duty.periodsPerWeekCalculated;
+    const periods = customPeriods !== undefined ? customPeriods : (duty.periodsPerWeekCalculated || duty.periodsPerWeekExempted || 2);
 
     const newAssignment: TeachingAssignment = {
       id: `as_duty_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -981,7 +981,7 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
       versionId: propVersionId,
       teacherId: currentSelectedTeacher.id,
       departmentId: currentSelectedTeacher.departmentId || '',
-      type: 'CONCURRENT',
+      type: duty.type === 'EXEMPTION' ? 'EXEMPTION' : 'CONCURRENT',
       dutyId: duty.id,
       dutyName: duty.name,
       classId: appliedClassId,
@@ -997,6 +997,30 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
 
     const nextList = [...localAssignments, newAssignment];
     setLocalAssignments(nextList);
+
+    // Đồng bộ chức vụ kiêm nhiệm vào teacher.positions để đồng bộ sang mọi biểu mẫu khác
+    const formattedDuty = `${duty.name} (${periods} tiết/tuần)`;
+    const rawDutyName = duty.name.replace(/\s*\([^)]*\)/g, '').trim();
+    const curPos = Array.isArray(currentSelectedTeacher.positions) ? currentSelectedTeacher.positions : [];
+    const filteredPos = curPos.filter((p) => {
+      const cleanP = p.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+      const normP = normalizePositionName(cleanP).toLowerCase();
+      const normNew = normalizePositionName(rawDutyName).toLowerCase();
+      return normP !== normNew && cleanP !== normNew;
+    });
+    const updatedPositions = [...filteredPos, formattedDuty];
+    currentSelectedTeacher.positions = updatedPositions;
+    dataStore.updateTeacher(currentSelectedTeacher.id, { positions: updatedPositions });
+
+    // Nếu gán chủ nhiệm lớp, đồng bộ vào danh sách lớp
+    if (appliedClassId) {
+      const cls = propClasses.find((c) => c.id === appliedClassId);
+      if (cls) {
+        cls.homeroomTeacherId = currentSelectedTeacher.id;
+        dataStore.updateClass(cls.id, { homeroomTeacherId: currentSelectedTeacher.id });
+      }
+    }
+
     setIsConcurrentModalOpen(false);
     showToast(
       `Đã phân công nhiệm vụ kiêm nhiệm "${duty.name}" (${periods} tiết/tuần) cho Thầy/Cô ${currentSelectedTeacher.fullName}!`
@@ -1006,9 +1030,56 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
   const handleRemoveAssignment = (assignmentId: string) => {
     if (!canEdit) return;
     pushHistory(localAssignments);
+
+    const removedAsg = localAssignments.find((a) => a.id === assignmentId);
+    if (removedAsg) {
+      const isDuty =
+        removedAsg.type === 'CONCURRENT' ||
+        removedAsg.type === 'EXEMPTION' ||
+        removedAsg.type === 'CONCURRENT_DUTY' ||
+        Boolean(removedAsg.dutyId) ||
+        Boolean(removedAsg.dutyName);
+
+      if (isDuty && removedAsg.teacherId) {
+        const teacher = propTeachers.find((t) => t.id === removedAsg.teacherId);
+        if (teacher && Array.isArray(teacher.positions)) {
+          const rawClean = (removedAsg.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+          const normClean = normalizePositionName(rawClean).toLowerCase();
+          const dId = (removedAsg.dutyId || '').trim().toLowerCase();
+
+          teacher.positions = teacher.positions.filter((p) => {
+            const cleanP = p.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+            const normP = normalizePositionName(cleanP).toLowerCase();
+            if (normClean && (normP === normClean || cleanP === normClean || cleanP === rawClean)) {
+              return false;
+            }
+            if (rawClean && (cleanP.includes(rawClean) || rawClean.includes(cleanP))) {
+              return false;
+            }
+            const slug = cleanP.replace(/[^a-z0-9_-]+/g, '_');
+            if (dId && (dId.includes(slug) || slug.includes(dId.replace('duty_custom_', '')))) {
+              return false;
+            }
+            return true;
+          });
+          dataStore.updateTeacher(teacher.id, { positions: teacher.positions });
+        }
+
+        if (removedAsg.classId) {
+          const cls = propClasses.find((c) => c.id === removedAsg.classId);
+          if (cls && cls.homeroomTeacherId === removedAsg.teacherId) {
+            cls.homeroomTeacherId = undefined;
+            dataStore.updateClass(cls.id, { homeroomTeacherId: undefined });
+          }
+        }
+      }
+
+      dataStore.deleteAssignment(assignmentId, true);
+    }
+
     const nextList = localAssignments.filter((a) => a.id !== assignmentId);
     setLocalAssignments(nextList);
-    showToast('Đã gỡ bỏ phân công.', 'info');
+    showToast('Đã gỡ bỏ phân công thành công.', 'info');
   };
 
   // Map teacherId -> set of subject names assigned to that teacher

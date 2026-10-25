@@ -104,5 +104,10 @@ service cloud.firestore {
     match /licenses/{licenseId} {
       allow read, write: if true;
     }
+
+    // System Schema & Structure Updates
+    match /system_config/{configId} {
+      allow read, write: if true;
+    }
   }
 }

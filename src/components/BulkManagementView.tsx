@@ -43,6 +43,7 @@ import {
   FileEdit,
   PanelLeftClose,
   PanelLeftOpen,
+  Briefcase,
 } from 'lucide-react';
 import {
   SchoolClass,
@@ -153,6 +154,15 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
       return true;
     });
   }, [activeClasses, classFilterGrade, classFilterBranch]);
+
+  const uniqueSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    return subjects.filter((s) => {
+      if (!s || !s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+  }, [subjects]);
 
   // Smart helper to compute generated class codes sequence (e.g. 6A9 -> 6A9, 6A10, 6A11...)
   const getGeneratedClassesInfo = useMemo(() => {
@@ -550,6 +560,16 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
   const [editTeacherTimetableName, setEditTeacherTimetableName] = useState('');
   const [editTeacherPositions, setEditTeacherPositions] = useState<string[]>([]);
   const [newCustomPositionInput, setNewCustomPositionInput] = useState('');
+  const [isEditTeacherDirty, setIsEditTeacherDirty] = useState(false);
+  const [showUnsavedEditTeacherModal, setShowUnsavedEditTeacherModal] = useState(false);
+
+  const handleRequestCloseEditTeacher = () => {
+    if (isEditTeacherDirty) {
+      setShowUnsavedEditTeacherModal(true);
+    } else {
+      setEditingTeacher(null);
+    }
+  };
 
   const handleStartEditTeacher = (t: Teacher) => {
     setEditingTeacher(t);
@@ -573,6 +593,8 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
     const curPos = getTeacherPositions(t, departments, duties, assignments);
     setEditTeacherPositions(curPos);
     setNewCustomPositionInput('');
+    setIsEditTeacherDirty(false);
+    setShowUnsavedEditTeacherModal(false);
   };
 
   const handleSaveEditTeacher = () => {
@@ -622,6 +644,8 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
         });
       }
       showToast(`Đã cập nhật thông tin giáo viên "${editTeacherFullName.trim()}" thành công!`);
+      setIsEditTeacherDirty(false);
+      setShowUnsavedEditTeacherModal(false);
       setEditingTeacher(null);
     } else {
       showToast('Không tìm thấy giáo viên để cập nhật!', 'error');
@@ -631,6 +655,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
   // Teacher Delete Modals State
   const [teacherToDelete, setTeacherToDelete] = useState<Teacher | null>(null);
   const [isBulkDeleteTeacherModalOpen, setIsBulkDeleteTeacherModalOpen] = useState<boolean>(false);
+  const [isBulkClearDutiesTeacherModalOpen, setIsBulkClearDutiesTeacherModalOpen] = useState<boolean>(false);
 
   const handleConfirmDeleteSingleTeacher = () => {
     if (!teacherToDelete) return;
@@ -647,6 +672,15 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
     setSelectedTeacherIds([]);
     setIsBulkDeleteTeacherModalOpen(false);
     showToast(`Đã xóa thành công ${count} giáo viên đã chọn!`);
+  };
+
+  const handleConfirmBulkClearDutiesForTeachers = () => {
+    const idsToClear = selectedTeacherIds.length > 0 ? selectedTeacherIds : activeTeachers.map((t) => t.id);
+    if (idsToClear.length === 0) return;
+    const count = dataStore.bulkClearDutiesForTeachers(idsToClear);
+    setIsBulkClearDutiesTeacherModalOpen(false);
+    setSelectedTeacherIds([]);
+    showToast(`Đã xóa sạch toàn bộ kiêm nhiệm của ${idsToClear.length} giáo viên (${count} phân công)!`);
   };
 
   const toggleSelectAllTeachers = () => {
@@ -1409,11 +1443,12 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
   const [selectedDutyIds, setSelectedDutyIds] = useState<string[]>([]);
   const [assignDutyId, setAssignDutyId] = useState<string>(duties[0]?.id || '');
   const [assignDutyTeacherIds, setAssignDutyTeacherIds] = useState<string[]>([]);
+  const [isBulkClearDutyTeacherModalOpen, setIsBulkClearDutyTeacherModalOpen] = useState<boolean>(false);
   const [dutyAssignTeacherSearch, setDutyAssignTeacherSearch] = useState<string>('');
   const [assignedDutySearchTerm, setAssignedDutySearchTerm] = useState<string>('');
   const [assignedDutyTypeFilter, setAssignedDutyTypeFilter] = useState<'ALL' | 'CONCURRENT' | 'EXEMPTION'>('ALL');
   const [selectedAssignedDutyIds, setSelectedAssignedDutyIds] = useState<string[]>([]);
-  const [assignmentToDelete, setAssignmentToDelete] = useState<{ id: string; teacherName: string; dutyName: string } | null>(null);
+  const [assignmentToDelete, setAssignmentToDelete] = useState<{ id: string; teacherName: string; dutyName: string; teacherId?: string; dutyId?: string } | null>(null);
   const [dutiesViewTab, setDutiesViewTab] = useState<'CATALOG' | 'ASSIGNED_LIST'>('CATALOG');
 
   // Add Duty Modal State
@@ -1620,6 +1655,14 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
 
     setAssignDutyTeacherIds([]);
     showToast(`Đã gán kiêm nhiệm "${targetDuty.name}" cho ${count} giáo viên thành công!`);
+  };
+
+  const handleConfirmBulkClearDutyForAssignedTeachers = () => {
+    if (assignDutyTeacherIds.length === 0) return;
+    const count = dataStore.bulkClearDutiesForTeachers(assignDutyTeacherIds);
+    setIsBulkClearDutyTeacherModalOpen(false);
+    setAssignDutyTeacherIds([]);
+    showToast(`Đã xóa sạch toàn bộ kiêm nhiệm của ${assignDutyTeacherIds.length} giáo viên đã chọn (${count} phân công)!`);
   };
 
   // ==========================================
@@ -2670,6 +2713,16 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   <Sliders className="w-3.5 h-3.5 text-amber-700" />
                   <span>Sửa định mức hàng loạt</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsBulkClearDutiesTeacherModalOpen(true)}
+                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-300 text-xs font-bold rounded-lg px-2.5 py-1 flex items-center gap-1.5 transition cursor-pointer"
+                  title="Xóa toàn bộ nhiệm vụ kiêm nhiệm của tất cả giáo viên trong trường hoặc các giáo viên đang chọn"
+                >
+                  <Briefcase className="w-3.5 h-3.5 text-indigo-700" />
+                  <span>Xóa kiêm nhiệm hàng loạt</span>
+                </button>
               </div>
 
               <div>
@@ -2707,6 +2760,16 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                           </option>
                         ))}
                     </select>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsBulkClearDutiesTeacherModalOpen(true)}
+                      className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs transition animate-in fade-in cursor-pointer"
+                      title="Xóa toàn bộ nhiệm vụ kiêm nhiệm của các giáo viên đã chọn"
+                    >
+                      <Briefcase className="w-3.5 h-3.5" />
+                      Xóa kiêm nhiệm ({selectedTeacherIds.length} GV)
+                    </button>
 
                     <button
                       onClick={() => setIsBulkDeleteTeacherModalOpen(true)}
@@ -3578,7 +3641,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {subjects.map((sub, idx) => {
+                  {uniqueSubjects.map((sub, idx) => {
                     const isApplicableFor = (grade: number) =>
                       !sub.applicableGrades || sub.applicableGrades.length === 0 || sub.applicableGrades.includes(grade);
 
@@ -3666,10 +3729,10 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                 <tfoot>
                   <tr className="bg-slate-100/95 border-t-2 border-slate-300 font-bold text-slate-900">
                     <td colSpan={4} className="py-3 px-4 text-right uppercase text-xs tracking-wider">
-                      Tổng số tiết / tuần theo Khối (Chuẩn GDPT 2018: 29 tiết):
+                      Tổng số tiết / tuần:
                     </td>
                     {[6, 7, 8, 9].map((g) => {
-                      const total = subjects.reduce((sum, s) => {
+                      const total = uniqueSubjects.reduce((sum, s) => {
                         const isApplicable =
                           !s.applicableGrades || s.applicableGrades.length === 0 || s.applicableGrades.includes(g);
                         if (!isApplicable) return sum;
@@ -3678,28 +3741,12 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                         );
                         return sum + (c?.periodsPerWeek ?? 0);
                       }, 0);
-                      const isExact = total === 29;
 
                       return (
                         <td key={g} className="py-3 px-3 text-center">
-                          <div className="flex flex-col items-center">
-                            <span
-                              className={`text-sm font-black ${
-                                isExact ? 'text-emerald-700' : total > 29 ? 'text-amber-700' : 'text-blue-900'
-                              }`}
-                            >
-                              {total} tiết
-                            </span>
-                            <span
-                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                                isExact
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
-                            >
-                              {isExact ? 'Chuẩn 29t' : `${total > 29 ? `+${total - 29}` : total - 29}t`}
-                            </span>
-                          </div>
+                          <span className="text-sm font-black text-blue-950">
+                            {total} tiết
+                          </span>
                         </td>
                       );
                     })}
@@ -4602,24 +4649,63 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                     )}
                   </div>
 
-                  <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1 bg-slate-50">
-                    {filteredActiveTeachersForDuty.map((t) => (
-                      <label key={t.id} className="flex items-center gap-2 hover:bg-white p-1 rounded cursor-pointer text-xs">
-                        <input
-                          type="checkbox"
-                          checked={assignDutyTeacherIds.includes(t.id)}
-                          onChange={() => {
-                            setAssignDutyTeacherIds((prev) =>
-                              prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
-                            );
-                          }}
-                          className="rounded text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="font-bold text-slate-900">{t.fullName}</span>
-                        <span className="text-[10px] text-slate-500 font-mono">({t.code})</span>
-                        {t.major && <span className="text-[10px] text-slate-400 ml-auto">{t.major}</span>}
-                      </label>
-                    ))}
+                  <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1 bg-slate-50">
+                    {(() => {
+                      const targetDutyObj = duties.find((d) => d.id === assignDutyId);
+                      const targetDutyNorm = targetDutyObj ? normalizePositionName(targetDutyObj.name).toLowerCase() : '';
+
+                      return filteredActiveTeachersForDuty.map((t) => {
+                        // Kiểm tra xem giáo viên đã được gán nhiệm vụ này trong phiên bản hiện tại chưa
+                        const existingAsg = currentVersionDutyAssignments.find(
+                          (a) =>
+                            a.teacherId === t.id &&
+                            (a.dutyId === assignDutyId ||
+                              (targetDutyNorm && a.dutyName && normalizePositionName(a.dutyName).toLowerCase() === targetDutyNorm))
+                        );
+
+                        // Hoặc có trong positions
+                        const hasInPositions = targetDutyNorm && Array.isArray(t.positions) && t.positions.some(
+                          (pos) => normalizePositionName(pos).toLowerCase() === targetDutyNorm
+                        );
+
+                        const isAlreadyAssigned = Boolean(existingAsg || hasInPositions);
+
+                        return (
+                          <label
+                            key={t.id}
+                            className={`flex items-center gap-2 p-1.5 rounded-lg cursor-pointer text-xs transition ${
+                              isAlreadyAssigned
+                                ? 'bg-amber-50/70 border border-amber-200 hover:bg-amber-100/70'
+                                : 'hover:bg-white'
+                            }`}
+                            title={t.positions && t.positions.length > 0 ? `Kiêm nhiệm: ${t.positions.join(', ')}` : undefined}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={assignDutyTeacherIds.includes(t.id)}
+                              onChange={() => {
+                                setAssignDutyTeacherIds((prev) =>
+                                  prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                                );
+                              }}
+                              className="rounded text-blue-600 focus:ring-blue-500"
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-bold text-slate-900 truncate">{t.fullName}</span>
+                              <span className="text-[10px] text-slate-500 font-mono">({t.code})</span>
+                            </div>
+                            <div className="ml-auto flex items-center gap-1">
+                              {isAlreadyAssigned && (
+                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 border border-amber-300 px-1.5 py-0.5 rounded shadow-2xs whitespace-nowrap">
+                                  Đã có ({existingAsg?.periodsPerWeek || targetDutyObj?.periodsPerWeekCalculated || targetDutyObj?.periodsPerWeekExempted || 0}t)
+                                </span>
+                              )}
+                              {t.major && <span className="text-[10px] text-slate-400">{t.major}</span>}
+                            </div>
+                          </label>
+                        );
+                      });
+                    })()}
                     {filteredActiveTeachersForDuty.length === 0 && (
                       <div className="p-3 text-center text-slate-400 text-[11px]">
                         Không tìm thấy giáo viên nào.
@@ -4628,14 +4714,26 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleBulkAssignDuties}
-                  disabled={assignDutyTeacherIds.length === 0}
-                  className="w-full bg-emerald-800 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                >
-                  <Award className="w-4 h-4" /> Gán cho {assignDutyTeacherIds.length} GV
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleBulkAssignDuties}
+                    disabled={assignDutyTeacherIds.length === 0}
+                    className="w-full bg-emerald-800 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs active:scale-[0.99]"
+                  >
+                    <Award className="w-4 h-4" /> Gán cho {assignDutyTeacherIds.length} GV
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkClearDutyTeacherModalOpen(true)}
+                    disabled={assignDutyTeacherIds.length === 0}
+                    className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs active:scale-[0.99]"
+                    title="Xóa toàn bộ nhiệm vụ kiêm nhiệm của các giáo viên đang tích chọn"
+                  >
+                    <Briefcase className="w-4 h-4" /> Xóa kiêm nhiệm ({assignDutyTeacherIds.length} GV đã chọn)
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -4724,11 +4822,9 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   {selectedDutyIds.length > 0 && (
                     <button
                       onClick={() => {
-                        if (confirm(`Xóa ${selectedDutyIds.length} nhiệm vụ kiêm nhiệm đã chọn?`)) {
-                          dataStore.bulkDeleteDuties(selectedDutyIds);
-                          setSelectedDutyIds([]);
-                          showToast('Đã xóa thành công!');
-                        }
+                        const count = dataStore.bulkDeleteDuties(selectedDutyIds);
+                        setSelectedDutyIds([]);
+                        showToast(`Đã xóa thành công ${count} nhiệm vụ khỏi danh mục!`);
                       }}
                       className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs transition cursor-pointer"
                     >
@@ -4808,6 +4904,23 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                       <span>Xóa đã chọn ({selectedAssignedDutyIds.length} mục)</span>
                     </button>
                   )}
+
+                  {/* Clear all duties in school button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('Bạn có chắc chắn muốn xóa sạch TẤT CẢ phân công kiêm nhiệm & miễn giảm của toàn bộ trường? Thao tác này sẽ giải phóng kiêm nhiệm của tất cả giáo viên và tính lại định mức.')) {
+                        const count = dataStore.bulkClearDutiesForTeachers();
+                        showToast(`Đã xóa sạch toàn bộ ${count} phân công kiêm nhiệm và miễn giảm trong toàn trường!`);
+                        setSelectedAssignedDutyIds([]);
+                      }
+                    }}
+                    className="bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                    title="Xóa triệt để toàn bộ nhiệm vụ kiêm nhiệm của tất cả giáo viên trong trường"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-700" />
+                    <span>Xóa sạch tất cả kiêm nhiệm</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -4830,12 +4943,26 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   <tbody className="divide-y divide-slate-100">
                     {duties.map((d) => {
                       const isSelected = selectedDutyIds.includes(d.id);
-                      const assignedToDuty = currentVersionDutyAssignments.filter(
+                      const isHead = dataStore.isHeadDepartmentDuty(d.id, d.name, d.code);
+                      const isDep = dataStore.isDeputyDepartmentDuty(d.id, d.name, d.code);
+                      const rawAssigned = currentVersionDutyAssignments.filter(
                         (a) =>
                           a.dutyId === d.id ||
+                          a.dutyId === d.code ||
+                          (isHead && dataStore.isHeadDepartmentDuty(a.dutyId, a.dutyName)) ||
+                          (isDep && dataStore.isDeputyDepartmentDuty(a.dutyId, a.dutyName)) ||
                           (a.dutyName && a.dutyName.toLowerCase() === d.name.toLowerCase()) ||
                           (d.code === 'CHU_NHIEM' && a.dutyName?.toLowerCase().includes('chủ nhiệm'))
                       );
+
+                      // Khử trùng lặp tuyệt đối: Mỗi giáo viên chỉ xuất hiện DUY NHẤT 1 LẦN trong danh sách huy hiệu
+                      const assignedMap = new Map<string, TeachingAssignment>();
+                      for (const asg of rawAssigned) {
+                        if (!assignedMap.has(asg.teacherId)) {
+                          assignedMap.set(asg.teacherId, asg);
+                        }
+                      }
+                      const assignedToDuty = Array.from(assignedMap.values());
 
                       return (
                         <tr key={d.id} className={`hover:bg-slate-50 transition ${isSelected ? 'bg-blue-50/60' : ''}`}>
@@ -4871,7 +4998,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                                   const teacher = teachers.find((t) => t.id === asg.teacherId);
                                   return (
                                     <span
-                                      key={asg.id}
+                                      key={`${d.id}_${asg.teacherId}`}
                                       className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-lg text-[11px] font-bold shadow-2xs"
                                     >
                                       <span>{teacher?.fullName || asg.teacherId}</span>
@@ -4883,6 +5010,8 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                                         onClick={() => {
                                           setAssignmentToDelete({
                                             id: asg.id,
+                                            teacherId: asg.teacherId,
+                                            dutyId: d.id,
                                             teacherName: teacher?.fullName || asg.teacherId,
                                             dutyName: d.name,
                                           });
@@ -5009,6 +5138,8 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                               onClick={() => {
                                 setAssignmentToDelete({
                                   id: asg.id,
+                                  teacherId: asg.teacherId,
+                                  dutyId: asg.dutyId || asg.dutyName,
                                   teacherName: teacher?.fullName || asg.teacherId,
                                   dutyName: asg.dutyName || 'Kiêm nhiệm',
                                 });
@@ -6614,6 +6745,56 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL: XÁC NHẬN XÓA KIÊM NHIỆM HÀNG LOẠT GIÁO VIÊN ĐÃ CHỌN */}
+      {isBulkClearDutiesTeacherModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-indigo-700">
+              <div className="p-2.5 rounded-2xl bg-indigo-100">
+                <Briefcase className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Xóa kiêm nhiệm hàng loạt</h3>
+                <p className="text-xs text-slate-500">
+                  {selectedTeacherIds.length > 0 ? `Đã chọn ${selectedTeacherIds.length} giáo viên` : `Toàn bộ ${activeTeachers.length} giáo viên trong trường`}
+                </p>
+              </div>
+            </div>
+            <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 text-xs space-y-2 text-indigo-950">
+              <div>
+                Bạn có chắc chắn muốn xóa toàn bộ phân công kiêm nhiệm của{' '}
+                <strong>
+                  {selectedTeacherIds.length > 0
+                    ? `${selectedTeacherIds.length} giáo viên đã chọn`
+                    : `tất cả ${activeTeachers.length} giáo viên trong trường`}
+                </strong>?
+              </div>
+              <p className="text-[11px] text-indigo-800">
+                Hệ thống sẽ xóa triệt để mọi nhiệm vụ kiêm nhiệm, thu hồi vai trò Tổ trưởng/Tổ phó/Chủ nhiệm, cập nhật hồ sơ và tính lại định mức tiết dạy.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkClearDutiesTeacherModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkClearDutiesForTeachers}
+                className="px-4 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Briefcase className="w-4 h-4" />
+                <span>Xác nhận Xóa kiêm nhiệm</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ========================================================================= */}
       {/* MODAL 8: CHỈNH SỬA THÔNG TIN GIÁO VIÊN */}
       {/* ========================================================================= */}
@@ -6632,14 +6813,14 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setEditingTeacher(null)}
+                onClick={handleRequestCloseEditTeacher}
                 className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-3 text-xs max-h-[65vh] overflow-y-auto pr-1">
+            <div onChange={() => setIsEditTeacherDirty(true)} className="space-y-3 text-xs max-h-[65vh] overflow-y-auto pr-1">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
@@ -6951,7 +7132,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Môn có thể giảng dạy (Chuyên môn / Kiêm nhiệm)</label>
                 <div className="border border-slate-200 rounded-xl p-2.5 bg-slate-50 max-h-28 overflow-y-auto grid grid-cols-2 gap-1.5">
-                  {subjects.map((sub) => {
+                  {uniqueSubjects.map((sub) => {
                     const isChecked = editTeacherSubjectsCanTeach.includes(sub.name) || editTeacherSubjectsCanTeach.includes(sub.code);
                     return (
                       <label key={sub.id} className="flex items-center gap-1.5 hover:bg-white p-1 rounded cursor-pointer">
@@ -6989,7 +7170,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
               <button
                 type="button"
-                onClick={() => setEditingTeacher(null)}
+                onClick={handleRequestCloseEditTeacher}
                 className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition cursor-pointer"
               >
                 Hủy bỏ
@@ -7001,6 +7182,62 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
               >
                 <Save className="w-3.5 h-3.5" />
                 <span>Lưu thông tin giáo viên</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL HỎI LƯU THÔNG TIN GIÁO VIÊN KHI SỬA Ở BULK VIEW */}
+      {showUnsavedEditTeacherModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-amber-100 text-amber-800 rounded-2xl shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Dữ liệu hồ sơ có thay đổi!</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Bạn có muốn lưu các thông tin vừa chỉnh sửa trước khi thoát không?</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-amber-50/60 p-3 rounded-2xl border border-amber-200/80">
+              Nếu bạn thoát mà không lưu, các thay đổi vừa chỉnh sửa cho giáo viên này sẽ bị hủy bỏ.
+            </p>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUnsavedEditTeacherModal(false);
+                  handleSaveEditTeacher();
+                }}
+                className="w-full py-2.5 px-4 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Save className="w-4 h-4 text-emerald-400" />
+                <span>Lưu thay đổi & Đóng</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditTeacherDirty(false);
+                  setShowUnsavedEditTeacherModal(false);
+                  setEditingTeacher(null);
+                }}
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-rose-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                <span>Bỏ qua thay đổi & Đóng</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowUnsavedEditTeacherModal(false)}
+                className="w-full py-2 px-4 text-slate-500 hover:text-slate-800 text-xs font-semibold transition cursor-pointer text-center"
+              >
+                Ở lại tiếp tục chỉnh sửa
               </button>
             </div>
           </div>
@@ -8101,7 +8338,15 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                 type="button"
                 onClick={() => {
                   if (assignmentToDelete) {
-                    dataStore.deleteAssignment(assignmentToDelete.id);
+                    if (assignmentToDelete.teacherId && (assignmentToDelete.dutyId || assignmentToDelete.dutyName)) {
+                      dataStore.unassignDutyFromTeacher(
+                        assignmentToDelete.dutyId || assignmentToDelete.dutyName,
+                        assignmentToDelete.teacherId,
+                        versionId
+                      );
+                    } else {
+                      dataStore.deleteAssignment(assignmentToDelete.id, true);
+                    }
                     toastService.notifyDutyChange(
                       assignmentToDelete.teacherName,
                       assignmentToDelete.dutyName,
@@ -8115,6 +8360,48 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Xác nhận Hủy gán</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: XÁC NHẬN XÓA KIÊM NHIỆM CHO CÁC GIÁO VIÊN ĐANG CHỌN Ở TAB KIÊM NHIỆM */}
+      {isBulkClearDutyTeacherModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2.5 rounded-2xl bg-rose-100">
+                <Briefcase className="w-6 h-6 text-rose-700" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Xóa kiêm nhiệm giáo viên</h3>
+                <p className="text-xs text-slate-500">Đã chọn {assignDutyTeacherIds.length} giáo viên</p>
+              </div>
+            </div>
+            <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-4 text-xs space-y-2 text-rose-950">
+              <div>
+                Bạn có chắc chắn muốn xóa toàn bộ nhiệm vụ kiêm nhiệm của <strong>{assignDutyTeacherIds.length} giáo viên</strong> đang tích chọn?
+              </div>
+              <p className="text-[11px] text-rose-800">
+                Sau khi xóa, các phân công kiêm nhiệm sẽ được gỡ bỏ hoàn toàn, hồ sơ giáo viên và định mức sẽ được tự động tính toán lại.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkClearDutyTeacherModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkClearDutyForAssignedTeachers}
+                className="px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Xác nhận Xóa kiêm nhiệm</span>
               </button>
             </div>
           </div>

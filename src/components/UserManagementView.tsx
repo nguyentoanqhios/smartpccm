@@ -68,13 +68,11 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [selectedPermission, setSelectedPermission] = useState<string>('ALL');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const detectedUrlId = dataStore.detectUrlSchoolId();
-  const isSuper = Boolean(
-    isSuperAdminEmail(currentUser?.email) ||
-    currentUser?.isSuperAdmin ||
-    dataStore.isCurrentUserSuperAdmin()
-  );
+  // CHỦ SỞ HỮU / QUẢN TRỊ VIÊN TỐI CAO: Chỉ cấp quyền quản lý bản quyền khi đúng email Super Admin
+  const isSuper = Boolean(isSuperAdminEmail(currentUser?.email));
 
   const [activeSubTab, setActiveSubTab] = useState<'USERS' | 'LICENSES'>(() => {
+    if (!isSuperAdminEmail(currentUser?.email)) return 'USERS';
     try {
       const saved = sessionStorage.getItem('pccm_user_management_tab');
       if (saved === 'LICENSES') {
@@ -86,14 +84,22 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   });
 
   React.useEffect(() => {
+    if (!isSuperAdminEmail(currentUser?.email)) {
+      setActiveSubTab('USERS');
+      return;
+    }
     const handleSwitch = (e: any) => {
-      if (e.detail === 'LICENSES' || e.detail === 'USERS') {
-        setActiveSubTab(e.detail);
+      if (e.detail === 'LICENSES') {
+        if (isSuperAdminEmail(currentUser?.email)) {
+          setActiveSubTab('LICENSES');
+        }
+      } else if (e.detail === 'USERS') {
+        setActiveSubTab('USERS');
       }
     };
     window.addEventListener('pccm-switch-subtab', handleSwitch);
     return () => window.removeEventListener('pccm-switch-subtab', handleSwitch);
-  }, []);
+  }, [currentUser?.email]);
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -368,7 +374,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         </div>
       )}
 
-      {activeSubTab === 'LICENSES' && (
+      {isSuper && activeSubTab === 'LICENSES' && (
         <ErrorBoundary fallbackTitle="Không thể tải phân hệ Cấp quyền trường học">
           <SchoolLicenseManager currentUser={currentUser} />
         </ErrorBoundary>

@@ -278,20 +278,25 @@ export function calculateTeacherWorkload(
   });
 
   // 3. Định mức chuẩn của giáo viên (Configurable, ưu tiên định mức đã gán, mặc định 19)
+  // Đối với Hiệu trưởng và Phó hiệu trưởng: số tiết dạy theo quy định (HT: 2 tiết/tuần, PHT: 4 tiết/tuần theo TT 28/2009/TT-BGDĐT), không phải là kiêm nhiệm hay miễn giảm
+  let defaultQuota = 19;
+  if (teacher.status === 'PRINCIPAL') {
+    defaultQuota = 2;
+  } else if (teacher.status === 'VICE_PRINCIPAL') {
+    defaultQuota = 4;
+  }
+
   const quota =
     teacher.standardQuota !== undefined &&
     teacher.standardQuota !== null &&
     !isNaN(Number(teacher.standardQuota))
       ? Number(teacher.standardQuota)
-      : 19;
+      : defaultQuota;
 
-  // 4. Kiểm tra chế độ miễn giảm tự động theo trạng thái giáo viên (Nghỉ sinh, Hiệu trưởng, Phó hiệu trưởng)
+  // 4. Kiểm tra chế độ miễn giảm tự động theo trạng thái giáo viên (Nghỉ thai sản...)
+  // Hiệu trưởng và Phó hiệu trưởng có định mức tiết dạy riêng theo quy định, tính đủ theo định mức đó, không tính vào miễn giảm.
   if (teacher.status === 'MATERNITY' && exemptionPeriods === 0) {
     exemptionPeriods = quota;
-  } else if (teacher.status === 'PRINCIPAL' && exemptionPeriods === 0) {
-    exemptionPeriods = Math.max(0, quota - 2);
-  } else if (teacher.status === 'VICE_PRINCIPAL' && exemptionPeriods === 0) {
-    exemptionPeriods = Math.max(0, quota - 4);
   }
 
   // 5. Section VI Formulas:

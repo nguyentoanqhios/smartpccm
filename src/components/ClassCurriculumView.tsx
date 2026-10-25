@@ -235,16 +235,28 @@ export const ClassCurriculumView: React.FC<ClassCurriculumViewProps> = ({
 
   const activeClasses = useMemo(() => classes.filter((c) => !c.isDeleted), [classes]);
 
+  const uniqueSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    return subjects.filter((s) => {
+      if (!s || !s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+  }, [subjects]);
+
   // Filtered subjects for SUBJECTS tab
   const filteredSubjects = useMemo(() => {
-    return subjects.filter((s) => {
+    const seen = new Set<string>();
+    return uniqueSubjects.filter((s) => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
       const matchSearch =
         !subjectSearch.trim() ||
         matchesQuery(subjectSearch, s.name, s.code, s.shortName, s.group);
       const matchGroup = selectedGroupFilter === 'ALL' || s.group === selectedGroupFilter;
       return matchSearch && matchGroup;
     });
-  }, [subjects, subjectSearch, selectedGroupFilter]);
+  }, [uniqueSubjects, subjectSearch, selectedGroupFilter]);
 
   // Subject groups list
   const subjectGroups = useMemo(() => {
@@ -2328,7 +2340,7 @@ export const ClassCurriculumView: React.FC<ClassCurriculumViewProps> = ({
                   onChange={(e) => setSelectedSubjectToAddToGrade(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  {subjects.map((s) => {
+                  {uniqueSubjects.map((s) => {
                     const isAlreadyInGrade = currentGradeCurriculum.some((c) => c.subjectId === s.id && c.periodsPerWeek > 0);
                     return (
                       <option key={s.id} value={s.id}>

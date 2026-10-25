@@ -18,15 +18,30 @@ export const STANDARD_POSITION_PRESETS = [
 ];
 
 /**
- * Chuẩn hóa tên chức vụ / vị trí công việc để loại bỏ trùng lặp
- * (Ví dụ: "Tổ trưởng" và "Tổ trưởng chuyên môn" là cùng một chức vụ, đồng bộ thành "Tổ trưởng chuyên môn")
+ * Chuẩn hóa tên chức vụ / vị trí công việc để loại bỏ trùng lặp và làm sạch định mức trong ngoặc
+ * (Ví dụ: "Bí thư Chi đoàn (2 tiết/tuần)" và "Bí thư Chi đoàn" đồng bộ thành "Bí thư Chi đoàn")
  */
 export function normalizePositionName(name: string): string {
   if (!name) return '';
-  const trimmed = name.trim();
-  const lower = trimmed.toLowerCase();
+  const clean = name.replace(/\s*\([^)]*\)/g, '').trim();
+  if (!clean) return '';
+  const lower = clean.toLowerCase();
 
-  // 1. Nhóm Tổ trưởng chuyên môn
+  // 1. Nhóm BGH
+  if (lower === 'hiệu trưởng' || lower === 'hieu truong' || lower === 'ht') {
+    return 'Hiệu trưởng';
+  }
+  if (
+    lower === 'phó hiệu trưởng' ||
+    lower === 'pho hieu truong' ||
+    lower === 'pht' ||
+    lower === 'phó ht' ||
+    lower === 'pho ht'
+  ) {
+    return 'Phó hiệu trưởng';
+  }
+
+  // 2. Nhóm Tổ trưởng chuyên môn
   if (
     lower === 'tổ trưởng' ||
     lower === 'tổ trưởng chuyên môn' ||
@@ -40,7 +55,7 @@ export function normalizePositionName(name: string): string {
     return 'Tổ trưởng chuyên môn';
   }
 
-  // 2. Nhóm Tổ phó chuyên môn
+  // 3. Nhóm Tổ phó chuyên môn
   if (
     lower === 'tổ phó' ||
     lower === 'tổ phó chuyên môn' ||
@@ -54,17 +69,20 @@ export function normalizePositionName(name: string): string {
     return 'Tổ phó chuyên môn';
   }
 
-  // 3. Nhóm Tổng phụ trách
+  // 4. Nhóm Tổng phụ trách Đội
   if (
     lower === 'tổng phụ trách' ||
     lower === 'tổng phụ trách đội' ||
     lower === 'tpt' ||
-    lower === 'tpt đội'
+    lower === 'tpt đội' ||
+    lower === 'tong phu trach' ||
+    lower === 'tong phu trach doi' ||
+    lower.includes('tổng phụ trách')
   ) {
     return 'Tổng phụ trách Đội';
   }
 
-  // 4. Nhóm Thư ký hội đồng
+  // 5. Nhóm Thư ký hội đồng
   if (
     lower === 'thư ký' ||
     lower === 'thư ký hội đồng' ||
@@ -72,12 +90,111 @@ export function normalizePositionName(name: string): string {
     lower === 'thu ky hoi dong' ||
     lower === 'thư ký hđsp' ||
     lower === 'tkhđ' ||
-    lower.includes('thư ký')
+    lower === 'tkhdsp'
   ) {
     return 'Thư ký hội đồng';
   }
 
-  // 5. Nhóm Giáo viên chủ nhiệm
+  // 6. Nhóm Chủ tịch Công đoàn
+  if (
+    lower === 'chủ tịch công đoàn' ||
+    lower === 'ct công đoàn' ||
+    lower === 'ctcd' ||
+    lower === 'chu tich cong doan' ||
+    lower === 'chủ tịch cđ' ||
+    lower === 'ct cđ'
+  ) {
+    return 'Chủ tịch Công đoàn';
+  }
+
+  // 7. Nhóm Phó Chủ tịch Công đoàn
+  if (
+    lower === 'phó chủ tịch công đoàn' ||
+    lower === 'pct công đoàn' ||
+    lower === 'pctcd' ||
+    lower === 'pho chu tich cong doan' ||
+    lower === 'phó ct công đoàn' ||
+    lower === 'pct cđ'
+  ) {
+    return 'Phó Chủ tịch Công đoàn';
+  }
+
+  // 8. Nhóm Bí thư Chi đoàn
+  if (
+    lower === 'bí thư chi đoàn' ||
+    lower === 'bí thư đoàn' ||
+    lower === 'bt chi đoàn' ||
+    lower === 'bt đoàn' ||
+    lower === 'bi thu chi doan' ||
+    lower === 'bi thu doan' ||
+    lower === 'btcd' ||
+    lower === 'btd' ||
+    lower === 'bí thư đoàn thanh niên'
+  ) {
+    return 'Bí thư Chi đoàn';
+  }
+
+  // 9. Nhóm Trưởng ban TTND
+  if (
+    lower === 'trưởng ban ttnd' ||
+    lower === 'trưởng ban thanh tra nhân dân' ||
+    lower === 'thanh tra nhân dân' ||
+    lower === 'ttnd' ||
+    lower === 'tb ttnd' ||
+    lower === 'truong ban ttnd'
+  ) {
+    return 'Trưởng ban TTND';
+  }
+
+  // 10. Nhóm Tổ tư vấn tâm lý
+  if (
+    lower === 'tổ tư vấn tâm lý' ||
+    lower === 'tư vấn tâm lý' ||
+    lower === 'tham vấn học đường' ||
+    lower === 'cán bộ tư vấn tâm lý' ||
+    lower === 'to tu van tam ly'
+  ) {
+    return 'Tổ tư vấn tâm lý';
+  }
+
+  // 11. Nhóm Phụ trách thiết bị / phòng bộ môn
+  if (
+    lower === 'phụ trách thiết bị' ||
+    lower === 'phụ trách thiết bị / phòng bộ môn' ||
+    lower === 'thiết bị' ||
+    lower === 'phụ trách phòng bộ môn' ||
+    lower === 'nhân viên thiết bị' ||
+    lower === 'phu trach thiet bi' ||
+    lower.includes('thiết bị')
+  ) {
+    return 'Phụ trách thiết bị / phòng bộ môn';
+  }
+
+  // 12. Nhóm Phụ trách CNTT & Chuyển đổi số
+  if (
+    lower === 'phụ trách cntt' ||
+    lower === 'phụ trách cntt & chuyển đổi số' ||
+    lower === 'cntt & chuyển đổi số' ||
+    lower === 'chuyển đổi số' ||
+    lower === 'phụ trách công nghệ thông tin' ||
+    lower === 'cntt'
+  ) {
+    return 'Phụ trách CNTT & Chuyển đổi số';
+  }
+
+  // 13. Nhóm Miễn giảm con mọn / nuôi con nhỏ
+  if (
+    lower.includes('con nhỏ') ||
+    lower.includes('con mon') ||
+    lower.includes('con mọn') ||
+    lower.includes('nuôi con') ||
+    lower.includes('dưới 12 tháng') ||
+    lower.includes('duoi 12 thang')
+  ) {
+    return 'Nuôi con dưới 12 tháng';
+  }
+
+  // 14. Nhóm Giáo viên chủ nhiệm
   if (
     lower === 'chủ nhiệm' ||
     lower === 'chủ nhiệm lớp' ||
@@ -91,14 +208,60 @@ export function normalizePositionName(name: string): string {
 
   // Nếu là "Chủ nhiệm 6A1" hoặc "GVCN 6A1"
   if (lower.startsWith('gvcn ') || lower.startsWith('chủ nhiệm lớp ') || lower.startsWith('chủ nhiệm ')) {
-    const classPart = trimmed.replace(/^(gvcn|chủ nhiệm lớp|chủ nhiệm)\s*/i, '').trim();
+    const classPart = clean.replace(/^(gvcn|chủ nhiệm lớp|chủ nhiệm)\s*/i, '').trim();
     if (classPart) {
       return `Chủ nhiệm lớp ${classPart.toUpperCase()}`;
     }
     return 'Giáo viên chủ nhiệm';
   }
 
-  return trimmed;
+  return clean;
+}
+
+/**
+ * Lấy định mức số tiết giảm/tính và loại kiêm nhiệm mặc định theo quy định của Bộ GD&ĐT (Thông tư 28/2009 & 15/2017)
+ */
+export function getDefaultDutyPeriodsAndType(posName: string): { periods: number; type: 'CONCURRENT' | 'EXEMPTION' } | null {
+  if (!posName) return null;
+  const norm = normalizePositionName(posName);
+
+  switch (norm) {
+    case 'Hiệu trưởng':
+      return { periods: 17, type: 'EXEMPTION' }; // Giảng dạy 2 tiết
+    case 'Phó hiệu trưởng':
+      return { periods: 15, type: 'EXEMPTION' }; // Giảng dạy 4 tiết
+    case 'Tổ trưởng chuyên môn':
+      return { periods: 3, type: 'CONCURRENT' };
+    case 'Tổ phó chuyên môn':
+      return { periods: 1, type: 'CONCURRENT' };
+    case 'Giáo viên chủ nhiệm':
+      return { periods: 4, type: 'CONCURRENT' };
+    case 'Chủ tịch Công đoàn':
+      return { periods: 3, type: 'CONCURRENT' };
+    case 'Phó Chủ tịch Công đoàn':
+      return { periods: 1, type: 'CONCURRENT' };
+    case 'Bí thư Chi đoàn':
+      return { periods: 2, type: 'CONCURRENT' };
+    case 'Tổng phụ trách Đội':
+      return { periods: 17, type: 'CONCURRENT' };
+    case 'Thư ký hội đồng':
+      return { periods: 2, type: 'CONCURRENT' };
+    case 'Trưởng ban TTND':
+      return { periods: 2, type: 'CONCURRENT' };
+    case 'Tổ tư vấn tâm lý':
+      return { periods: 2, type: 'CONCURRENT' };
+    case 'Phụ trách thiết bị / phòng bộ môn':
+      return { periods: 3, type: 'CONCURRENT' };
+    case 'Phụ trách CNTT & Chuyển đổi số':
+      return { periods: 2, type: 'CONCURRENT' };
+    case 'Nuôi con dưới 12 tháng':
+      return { periods: 2, type: 'EXEMPTION' };
+    default:
+      if (norm.startsWith('Chủ nhiệm lớp ')) {
+        return { periods: 4, type: 'CONCURRENT' };
+      }
+      return null;
+  }
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   Cloud,
   CloudUpload,
   CloudDownload,
+  UploadCloud,
   CheckCircle2,
   AlertTriangle,
   Loader2,
@@ -34,9 +35,10 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import { dataStore, isSuperAdminEmail } from '../repositories/dataStore';
+import { firestoreRepository } from '../repositories/firestoreRepository';
 import { cloudflareTenantService, CloudflareTenantSyncPayload } from '../services/cloudflareTenantService';
 import { CLOUDFLARE_WORKER_CODE } from '../services/cloudflareWorkerCode';
-import { auth } from '../firebase/config';
+import { auth, ensureFirebaseAuth } from '../firebase/config';
 
 interface CloudSyncModalProps {
   isOpen: boolean;
@@ -86,6 +88,8 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
     message: string;
     timestamp: string;
   } | null>(null);
+
+  const [isPushingLicenses, setIsPushingLicenses] = useState(false);
 
   // Cloudflare Config State
   const [cfWorkerUrl, setCfWorkerUrl] = useState(() => cloudflareTenantService.getConfig()?.workerUrl || '');
@@ -248,6 +252,67 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
       });
     } finally {
       setIsPulling(false);
+    }
+  };
+
+  // 3. PUSH ALL LICENSES / CONFIGS TO CLOUD (Đẩy đồng bộ cấu hình & bản quyền cho các trường)
+  const handlePushAllLicensesToCloud = async () => {
+    if (isPushingLicenses || isPushing || isPulling) return;
+    setIsPushingLicenses(true);
+    setOperationResult(null);
+
+    try {
+      await ensureFirebaseAuth();
+      const res = await dataStore.syncAllLicensesToCloud();
+      if (res.success) {
+        setOperationResult({
+          type: 'push',
+          success: true,
+          message: `ĐÃ ĐỒNG BỘ THÀNH CÔNG CẤU HÌNH CHO CÁC TRƯỜNG: Đã đẩy ${res.count} trường bản quyền lên Cloud Firestore (Vercel). Các trường đối tác có thể truy cập hệ thống ngay lập tức với phiên bản mới nhất! (Dữ liệu nội bộ riêng của từng trường được bảo vệ 100%, không bị ghi đè).`,
+          timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        });
+        await loadTenantsList();
+      } else {
+        setOperationResult({
+          type: 'push',
+          success: false,
+          message: res.message || 'Lỗi khi đẩy đồng bộ cấu hình bản quyền lên Cloud.',
+          timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
+    } catch (err: any) {
+      setOperationResult({
+        type: 'push',
+        success: false,
+        message: err?.message || 'Có lỗi xảy ra khi đẩy cấu hình bản quyền lên Cloud Firestore.',
+        timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+      });
+    } finally {
+      setIsPushingLicenses(false);
+    }
+  };
+
+  // 4. PUSH SINGLE LICENSE TO CLOUD
+  const handlePushSingleLicenseToCloud = async (targetTenantId: string) => {
+    const lic = dataStore.getSchoolLicenseById(targetTenantId);
+    if (!lic) return;
+    try {
+      await ensureFirebaseAuth();
+      await firestoreRepository.saveSchoolLicense(lic);
+      setOperationResult({
+        type: 'push',
+        success: true,
+        message: `Đã đẩy thành công cấu hình & bản quyền của trường [${lic.schoolName}] lên Cloud Firestore!`,
+        timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      });
+      await loadTenantsList();
+    } catch (err: any) {
+      setOperationResult({
+        type: 'push',
+        success: false,
+        message: `Lỗi khi đẩy cấu hình trường [${lic.schoolName}]: ${err?.message}`,
+        timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+      });
     }
   };
 
@@ -569,6 +634,49 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
                 </button>
               </div>
 
+              {/* DÀNH CHO SUPER ADMIN: NÚT ĐẨY ĐỒNG BỘ CẤU HÌNH & BẢN QUYỀN CHO CÁC TRƯỜNG */}
+              {isMasterSuperAdmin && (
+                <div className="p-4 bg-gradient-to-r from-amber-50/90 via-indigo-50/70 to-blue-50/90 border-2 border-indigo-300/80 rounded-2xl shadow-xs space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-900 to-blue-950 text-white flex items-center justify-center shrink-0 shadow-md">
+                        <ShieldCheck className="w-5 h-5 text-amber-300" />
+                      </div>
+                      <div>
+                        <div className="text-xs sm:text-sm font-black text-indigo-950 uppercase flex items-center gap-2 flex-wrap">
+                          <span>ĐỒNG BỘ CẤU HÌNH & BẢN QUYỀN CHO CÁC TRƯỜNG</span>
+                          <span className="text-[10px] bg-amber-400 text-amber-950 px-2 py-0.5 rounded-full font-bold">
+                            Vercel / Firebase Cloud
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-700 mt-1 leading-relaxed">
+                          Đẩy danh sách bản quyền, mật khẩu đăng nhập và quyền hạn của các trường lên Cloud Firestore.
+                          <br />
+                          <span className="text-emerald-800 font-bold">
+                            ✓ Dữ liệu nội bộ (giáo viên, lớp học, phân công) của từng trường được cách ly an toàn 100%, không bị ảnh hưởng hay ghi đè.
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      id="btn-sync-all-licenses-to-cloud"
+                      type="button"
+                      disabled={isPushingLicenses || isPushing || isPulling}
+                      onClick={handlePushAllLicensesToCloud}
+                      className="px-4 py-2.5 bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 hover:from-indigo-800 hover:to-blue-800 text-white font-black text-xs rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-2 shrink-0 border border-indigo-700 hover:scale-[1.01] active:scale-95 disabled:opacity-50"
+                      title="Đẩy đồng bộ cấu hình bản quyền và thông tin truy cập cho tất cả các trường lên Firebase Cloud"
+                    >
+                      {isPushingLicenses ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                      ) : (
+                        <UploadCloud className="w-4 h-4 text-amber-300" />
+                      )}
+                      <span>{isPushingLicenses ? 'Đang đẩy cấu hình...' : 'ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Progress Indicator */}
               {(isPushing || isPulling) && (
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 animate-in fade-in">
@@ -635,13 +743,53 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
           {/* TAB 2: CONFIG (CẤU HÌNH CLOUDFLARE WORKER) */}
           {activeTab === 'CONFIG' && isMasterSuperAdmin && (
             <div className="space-y-4">
+              {/* THÔNG BÁO VỀ VERCEL VÀ BACKEND */}
+              <div className="bg-amber-50/90 border-2 border-amber-300 rounded-2xl p-4 text-xs text-amber-950 space-y-2.5">
+                <div className="font-black flex items-center gap-2 text-amber-950 text-xs sm:text-sm">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>LƯU Ý QUAN TRỌNG: ỨNG DỤNG ĐANG CHẠY TRÊN VERCEL (KHÔNG CẦN BACKEND)</span>
+                </div>
+                <p className="leading-relaxed text-[11px] text-slate-700">
+                  Phần mềm triển khai trên <strong>Vercel</strong> hoạt động theo kiến trúc Frontend tĩnh trực tiếp kết nối với <strong>Google Firebase Firestore</strong>. Hệ thống <strong>hoàn toàn không cần máy chủ backend hay Cloudflare Worker</strong> để hoạt động hay đồng bộ dữ liệu.
+                </p>
+                <div className="p-2.5 bg-white rounded-xl border border-amber-200 text-[11px] text-slate-700 space-y-1">
+                  <span className="font-bold text-amber-900 block">
+                    ⚡ Vì sao bạn thấy thông báo "Không thể kết nối tới Cloudflare Worker: Failed to fetch"?
+                  </span>
+                  <span>
+                    Thông báo này xuất hiện khi URL Worker bên dưới chưa được triển khai hoặc không tồn tại. Điều này <strong>HOÀN TOÀN BÌNH THƯỜNG</strong> và <strong>KHÔNG ẢNH HƯỞNG GÌ</strong> đến việc lưu trữ và đồng bộ của các trường học qua Google Firebase!
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCfWorkerUrl('');
+                      setConnectionTestResult(null);
+                      cloudflareTenantService.saveConfig({ workerUrl: '', apiKey: '', autoSync: false });
+                    }}
+                    className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 text-amber-950 font-bold rounded-xl text-[11px] transition cursor-pointer"
+                  >
+                    Bỏ trống URL Worker (Xóa thông báo đỏ)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('SYNC')}
+                    className="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 text-white font-bold rounded-xl text-[11px] transition cursor-pointer flex items-center gap-1 shadow-xs"
+                  >
+                    <Cloud className="w-3.5 h-3.5 text-blue-200" />
+                    <span>Sang Tab Đồng bộ Đám mây (Firebase)</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 text-xs text-indigo-950 space-y-1.5">
                 <div className="font-extrabold flex items-center gap-2 text-indigo-950">
                   <Globe className="w-4 h-4 text-indigo-700" />
-                  <span>HẠ TẦNG CLOUDFLARE SERVERLESS (PAGES + KV / WORKERS)</span>
+                  <span>TÙY CHỌN BỔ SUNG: HẠ TẦNG CLOUDFLARE SERVERLESS (KV / WORKERS)</span>
                 </div>
                 <p className="leading-relaxed">
-                  Cloudflare Workers cung cấp <strong>100.000 requests miễn phí mỗi ngày</strong>, độ trễ toàn cầu cực thấp, tốc độ tải dưới 50ms và độ tin cậy 100%. Dữ liệu của từng trường học được phân vùng an toàn trong KV Namespace.
+                  (Tùy chọn phụ) Nếu muốn thiết lập thêm 1 lớp sao lưu thứ hai trên Cloudflare KV dự phòng ngoài Firebase Firestore, hãy triển khai mã nguồn ở tab bên cạnh và dán URL vào đây:
                 </p>
               </div>
 
@@ -811,6 +959,41 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
           {/* TAB 4: TENANTS (QUẢN LÝ ĐA TRƯỜNG) */}
           {activeTab === 'TENANTS' && isMasterSuperAdmin && (
             <div className="space-y-4">
+              {/* TOP ACTION BANNER FOR ALL SCHOOLS */}
+              <div className="p-4 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+                <div>
+                  <div className="font-black text-sm flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-amber-300" />
+                    <span>ĐỒNG BỘ CẤU HÌNH & BẢN QUYỀN LÊN CLOUD</span>
+                    <span className="text-[10px] bg-amber-400 text-amber-950 font-bold px-2 py-0.5 rounded-full">
+                      Vercel / Firebase
+                    </span>
+                  </div>
+                  <div className="text-xs text-blue-200 mt-1 leading-relaxed">
+                    Đẩy đồng bộ danh sách bản quyền, thông tin đăng nhập và quyền hạn của tất cả {tenantsList.length} trường lên Cloud Firestore.
+                    <br />
+                    <span className="text-emerald-300 font-semibold">
+                      ✓ Dữ liệu riêng của từng trường không bị ảnh hưởng hay ghi đè.
+                    </span>
+                  </div>
+                </div>
+                <button
+                  id="btn-sync-tenants-to-cloud"
+                  type="button"
+                  disabled={isPushingLicenses}
+                  onClick={handlePushAllLicensesToCloud}
+                  className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-amber-950 font-black text-xs rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2 shrink-0 active:scale-95 disabled:opacity-50"
+                  title="Đẩy đồng bộ cấu hình bản quyền cho các trường lên Cloud Firestore"
+                >
+                  {isPushingLicenses ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-950" />
+                  ) : (
+                    <UploadCloud className="w-4 h-4 text-amber-950" />
+                  )}
+                  <span>{isPushingLicenses ? 'Đang đẩy lên Cloud...' : 'ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG'}</span>
+                </button>
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-extrabold text-slate-900 text-xs uppercase tracking-wide">
@@ -858,15 +1041,26 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
                           {t.updatedAt ? new Date(t.updatedAt).toLocaleDateString('vi-VN') : '—'}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handlePullFromCloud(t.id)}
-                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 mx-auto"
-                            title="Tải dữ liệu của trường này về máy"
-                          >
-                            <CloudDownload className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Tải về</span>
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handlePushSingleLicenseToCloud(t.id)}
+                              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-300 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                              title="Đẩy cấu hình và bản quyền trường này lên Cloud Firestore"
+                            >
+                              <UploadCloud className="w-3.5 h-3.5 text-blue-700" />
+                              <span>Đẩy cấu hình</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handlePullFromCloud(t.id)}
+                              className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                              title="Tải dữ liệu của trường này về máy"
+                            >
+                              <CloudDownload className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>Tải về</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

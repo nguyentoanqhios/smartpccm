@@ -31,9 +31,9 @@ import {
 } from '../types';
 import { auth, ensureFirebaseAuth, isSystemSyncEmail } from '../firebase/config';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { firestoreRepository, FirestoreSubCollection } from './firestoreRepository';
+import { firestoreRepository, FirestoreSubCollection, isQuotaExhaustedError } from './firestoreRepository';
 import { INITIAL_ABBREVIATION_RULES } from './seedAbbreviations';
-import { normalizePositionName } from '../utils/teacherPositions';
+import { normalizePositionName, getDefaultDutyPeriodsAndType } from '../utils/teacherPositions';
 import { removeVietnameseTones } from '../utils/searchUtils';
 import type { ComprehensiveSetupPayload } from '../import-export/excelImportService';
 import {
@@ -225,6 +225,8 @@ class DataStore {
   private currentVersionId: string = 'ver_hk1_official';
 
   private isSyncingDepartmentDuties: boolean = false;
+  private isInitializing: boolean = true;
+  private hasUnsavedChangesFlag: boolean = false;
   private listeners: (() => void)[] = [];
 
   /**
@@ -393,10 +395,33 @@ class DataStore {
   }
 
   constructor() {
+    this.isInitializing = true;
+    this.hasUnsavedChangesFlag = false;
     this.loadFromStorage();
+
+    // THỰC HIỆN LỆNH CỦA NGƯỜI DÙNG: Xóa sạch dữ liệu mẫu giáo viên, kiêm nhiệm, lớp trên app, đám mây
+    // Sau đây mở phần mềm chỉ có sẵn danh mục kiêm nhiệm, môn học và khung tiết mặc định, danh mục viết tắt
+    if (typeof window !== 'undefined') {
+      try {
+        const orderExecuted = localStorage.getItem('pccm_clean_slate_order_executed_v4');
+        if (!orderExecuted) {
+          this.clearAllOperationalData(this.currentSchoolId, true);
+          localStorage.setItem('pccm_clean_slate_order_executed_v4', 'true');
+        }
+      } catch {}
+    }
+
+    firestoreRepository.addQuotaListener(() => {
+      this.stopFirestoreRealtimeSync();
+      this.cloudSyncStatus = 'idle';
+      this.notify();
+    });
+
     this.loadLicensesFromCloud().catch(() => {});
     this.initAuthListener();
     this.initFirestoreRealtimeSync(this.currentSchoolId);
+    this.isInitializing = false;
+    this.hasUnsavedChangesFlag = false;
   }
 
   private loadFromStorage() {
@@ -564,20 +589,54 @@ class DataStore {
         return { ...d, name: dName, fullName, schoolId: d.schoolId || 'school_quyhop' };
       });
       this.duties = this.getItem(STORAGE_KEYS.DUTIES, INITIAL_DUTIES);
-      const rawClasses = this.getItem(STORAGE_KEYS.CLASSES, INITIAL_CLASSES);
-      const hasAnySubBranch = rawClasses.some((c: SchoolClass) => c.branchId === 'branch_sub');
-      this.classes = rawClasses.map((c: SchoolClass) => {
-        let branchId = c.branchId;
-        if (!branchId || (!hasAnySubBranch && ['6A11', '7A10', '8A9', '9A12'].includes(c.code))) {
-          branchId = ['6A11', '7A10', '8A9', '9A12'].includes(c.code) ? 'branch_sub' : 'branch_main';
-        }
-        return {
-          ...c,
-          branchId,
-          schoolId: c.schoolId || 'school_quyhop',
-        };
-      });
+      const rawClasses = this.getItem<SchoolClass[]>(STORAGE_KEYS.CLASSES, []);
+      this.classes = Array.isArray(rawClasses) ? rawClasses : [];
       this.subjects = this.getItem(STORAGE_KEYS.SUBJECTS, INITIAL_SUBJECTS);
+      // Chuẩn hóa tên môn: Nghệ thuật - MT và Nghệ thuật - AN
+      this.subjects = this.subjects.map((s) => {
+        if (s.code === 'MY_THUAT' || s.id === 'sub_my_thuat' || s.name === 'Mĩ thuật' || s.name === 'Mỹ thuật') {
+          return { ...s, name: 'Nghệ thuật - MT', shortName: s.shortName === 'M.Thuật' || s.shortName === 'MT' ? 'MT' : s.shortName };
+        }
+        if (s.code === 'AM_NHAC' || s.id === 'sub_am_nhac' || s.name === 'Âm nhạc') {
+          return { ...s, name: 'Nghệ thuật - AN', shortName: s.shortName === 'Nhạc' || s.shortName === 'AN' ? 'AN' : s.shortName };
+        }
+        return s;
+      });
+      // Tự động bổ sung môn LS&ĐL - Sử và LS&ĐL - Địa nếu chưa có
+      if (!this.subjects.some((s) => s.code === 'LS_DL_SU' || s.id === 'sub_ls_dl_su')) {
+        const lsDlSub = this.subjects.find((s) => s.code === 'LICH_SU_DIA_LI' || s.id === 'sub_ls_dl');
+        const deptId = lsDlSub?.departmentId || 'dept_van_su_dia';
+        this.subjects.push({
+          id: 'sub_ls_dl_su',
+          code: 'LS_DL_SU',
+          name: 'LS&ĐL - Sử',
+          shortName: 'Sử',
+          group: 'Xã hội',
+          applicableGrades: [6, 7, 8, 9],
+          departmentId: deptId,
+          allowsMultipleTeachers: false,
+          isIntegrated: false,
+          active: true,
+          color: '#f59e0b',
+        });
+      }
+      if (!this.subjects.some((s) => s.code === 'LS_DL_DIA' || s.id === 'sub_ls_dl_dia')) {
+        const lsDlSub = this.subjects.find((s) => s.code === 'LICH_SU_DIA_LI' || s.id === 'sub_ls_dl');
+        const deptId = lsDlSub?.departmentId || 'dept_van_su_dia';
+        this.subjects.push({
+          id: 'sub_ls_dl_dia',
+          code: 'LS_DL_DIA',
+          name: 'LS&ĐL - Địa',
+          shortName: 'Địa',
+          group: 'Xã hội',
+          applicableGrades: [6, 7, 8, 9],
+          departmentId: deptId,
+          allowsMultipleTeachers: false,
+          isIntegrated: false,
+          active: true,
+          color: '#b45309',
+        });
+      }
       // Đảm bảo mọi môn học đều có applicableGrades hợp lệ
       this.subjects = this.subjects.map((s) => ({
         ...s,
@@ -596,6 +655,7 @@ class DataStore {
           { id: 'sub_khtn_sinh', code: 'KHTN_SINH', name: 'KHTN - Sinh học', shortName: 'Sinh 8-9', group: 'Tự nhiên', applicableGrades: [8, 9], departmentId: deptId, allowsMultipleTeachers: false, isIntegrated: false, active: true, color: '#16a34a', periodsPerWeek: 1 }
         );
       }
+      this.subjects = this.deduplicateSubjectsList(this.subjects);
       this.curriculum = this.getItem(STORAGE_KEYS.CURRICULUM, INITIAL_CURRICULUM);
       // Đảm bảo curriculum của phân môn KHTN cho khối 8 & 9 nếu chưa có
       if (!this.curriculum.some((c) => c.subjectId === 'sub_khtn_ly')) {
@@ -613,75 +673,11 @@ class DataStore {
           });
         });
       }
-      const rawTeachers = this.getItem(STORAGE_KEYS.TEACHERS, INITIAL_TEACHERS);
-      const defaultWp = this.workplaces.find((w) => w.isDefault) || this.workplaces[0];
-      const allWp = this.workplaces.find((w) => w.id === 'wp_all' || w.name === 'Toàn trường') || defaultWp;
-      const subWp = this.workplaces.find((w) => w.id === 'wp_sub' || w.name === 'Phân hiệu') || defaultWp;
+      const rawTeachers = this.getItem<Teacher[]>(STORAGE_KEYS.TEACHERS, []);
+      this.teachers = Array.isArray(rawTeachers) ? rawTeachers : [];
 
-      const hasAnySubTeacher = rawTeachers.some((t: Teacher) => t.workplaceId === subWp.id || t.workplace === subWp.name);
-      this.teachers = rawTeachers.map((t: Teacher) => {
-        let wpId = t.workplaceId;
-        let wpName = t.workplace;
-        const isSubCandidate =
-          ['tc_le_quan', 'tc_phan_thao', 'tc_vu_nam', 'tc_hoang_anh'].includes(t.id) ||
-          t.notes?.includes('Phân hiệu') ||
-          t.notes?.includes('phân hiệu');
-
-        if (!wpId && !wpName) {
-          if (t.status === 'PRINCIPAL' || t.status === 'VICE_PRINCIPAL') {
-            wpId = allWp.id;
-            wpName = allWp.name;
-          } else if (isSubCandidate) {
-            wpId = subWp.id;
-            wpName = subWp.name;
-          } else {
-            wpId = defaultWp.id;
-            wpName = defaultWp.name;
-          }
-        } else if (!hasAnySubTeacher && isSubCandidate && wpId === defaultWp.id) {
-          wpId = subWp.id;
-          wpName = subWp.name;
-        } else if (wpId && !wpName) {
-          wpName = this.workplaces.find((w) => w.id === wpId)?.name || defaultWp.name;
-        } else if (!wpId && wpName) {
-          wpId = this.workplaces.find((w) => (w.name || '').trim().toLowerCase() === (wpName || '').trim().toLowerCase())?.id || defaultWp.id;
-        }
-        return {
-          ...t,
-          schoolId: t.schoolId || 'school_quyhop',
-          workplaceId: wpId,
-          workplace: wpName,
-        };
-      });
-      const rawAssignments = this.getItem(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
-
-      // Deduplicate assignments on startup to fix any duplicate/stale records & sanitize doc IDs
-      const seenAsg = new Set<string>();
-      const cleanAssignments: TeachingAssignment[] = [];
-      for (const a of rawAssignments) {
-        if (!a) continue;
-        const key = `${a.schoolYearId || ''}_${a.semesterId || ''}_${a.versionId || ''}_${a.teacherId || ''}_${a.classId || 'noclass'}_${a.subjectId || 'nosub'}_${a.dutyName || 'noduty'}_${a.periodsPerWeek || 0}_${a.session || ''}`;
-        if (!seenAsg.has(key)) {
-          seenAsg.add(key);
-          let safeId = a.id;
-          if (safeId && (safeId.includes('/') || safeId.includes('\\') || safeId.includes(':'))) {
-            safeId = safeId.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
-          }
-          let safeDutyId = a.dutyId;
-          if (safeDutyId && (safeDutyId.includes('/') || safeDutyId.includes('\\') || safeDutyId.includes(':'))) {
-            safeDutyId = safeDutyId.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
-          }
-          cleanAssignments.push({
-            ...a,
-            id: safeId,
-            dutyId: safeDutyId,
-            schoolId: a.schoolId || 'school_quyhop',
-          });
-        }
-      }
-      this.assignments = cleanAssignments.length > 0
-        ? cleanAssignments
-        : INITIAL_ASSIGNMENTS.map((a) => ({ ...a, schoolId: 'school_quyhop' }));
+      const rawAssignments = this.getItem<TeachingAssignment[]>(STORAGE_KEYS.ASSIGNMENTS, []);
+      this.assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
 
       this.auditLogs = this.getItem(STORAGE_KEYS.AUDIT_LOGS, []);
       this.feedbacks = this.getItem(STORAGE_KEYS.FEEDBACKS, []);
@@ -806,7 +802,7 @@ class DataStore {
       this.abbreviationRules = this.getItem(STORAGE_KEYS.ABBREVIATION_RULES, INITIAL_ABBREVIATION_RULES);
       if (!this.abbreviationRules || this.abbreviationRules.length === 0) {
         this.abbreviationRules = [...INITIAL_ABBREVIATION_RULES];
-        this.saveToStorage();
+        this.saveLocalCacheOnly();
       } else {
         // Tự động khử trùng lặp và đồng bộ các quy tắc chuẩn mới nhất (mỗi nhiệm vụ 1 định nghĩa duy nhất + biến thể tham chiếu)
         this.deduplicateAbbreviationRules();
@@ -845,7 +841,7 @@ class DataStore {
       this.syncAllDepartmentDutiesAndAssignments();
 
       // Persist the clean state
-      this.saveToStorage();
+      this.saveLocalCacheOnly();
 
       const session = this.getItem(STORAGE_KEYS.ACTIVE_SESSION, null);
       if (session && !urlSchoolId) {
@@ -895,6 +891,8 @@ class DataStore {
       if (isSystemSyncEmail(this.currentUser?.email)) {
         this.currentUser = DEFAULT_GUEST_PROFILE;
       }
+
+      this.hasUnsavedChangesFlag = false;
     } catch (e) {
       console.warn('Fallback to initial seed data due to store error', e);
       this.resetToDefaultSeed();
@@ -919,6 +917,89 @@ class DataStore {
     } catch (e) {
       console.warn('Lỗi ghi localStorage:', e);
     }
+  }
+
+  /**
+   * Tự động nâng cấp danh mục chuẩn (Môn học split KHTN/LS&ĐL, Khung PPCT chuẩn, Nhiệm vụ chuẩn)
+   * cho bất kỳ trường học (tenant) nào để bảo đảm bản quyền của trường luôn có đầy đủ tính năng mới nhất
+   */
+  public upgradeTenantStandardCatalog(schoolId: string = this.currentSchoolId): void {
+    if (!schoolId) return;
+
+    // 1. Đồng bộ môn học chuẩn (Đặc biệt: KHTN Lý/Hóa/Sinh, LS&ĐL Sử/Địa, GDQP, Âm nhạc, Mỹ thuật)
+    const existingSubjectCodes = new Set(this.subjects.map((s) => s.code));
+    const existingSubjectIds = new Set(this.subjects.map((s) => s.id));
+
+    INITIAL_SUBJECTS.forEach((initSub) => {
+      if (!existingSubjectCodes.has(initSub.code) && !existingSubjectIds.has(initSub.id)) {
+        this.subjects.push({ ...initSub });
+        existingSubjectCodes.add(initSub.code);
+        existingSubjectIds.add(initSub.id);
+      }
+    });
+
+    // Chuẩn hóa applicableGrades cho các môn học
+    this.subjects = this.subjects.map((s) => {
+      let grades = s.applicableGrades;
+      if (!grades || grades.length === 0) {
+        if (s.code === 'KHTN_LY' || s.code === 'KHTN_HOA' || s.code === 'KHTN_SINH') {
+          grades = [8, 9];
+        } else if (s.code === 'KHTN') {
+          grades = [6, 7];
+        } else {
+          grades = [6, 7, 8, 9];
+        }
+      }
+      return {
+        ...s,
+        applicableGrades: grades,
+      };
+    });
+
+    // 2. Đồng bộ Khung phân phối chương trình chuẩn (INITIAL_CURRICULUM)
+    if (!this.curriculum || this.curriculum.length === 0) {
+      this.curriculum = [...INITIAL_CURRICULUM];
+    } else {
+      const currKey = (c: CurriculumDistribution) => `${c.schoolYearId || 'sy_2026_2027'}_${c.semesterId}_${c.grade}_${c.subjectId}`;
+      const existingCurrKeys = new Set(this.curriculum.map(currKey));
+
+      INITIAL_CURRICULUM.forEach((initCurr) => {
+        const k = currKey(initCurr);
+        if (!existingCurrKeys.has(k)) {
+          this.curriculum.push({ ...initCurr });
+          existingCurrKeys.add(k);
+        }
+      });
+    }
+
+    // 3. Đồng bộ Danh mục nhiệm vụ kiêm nhiệm chuẩn (INITIAL_DUTIES)
+    if (!this.duties || this.duties.length === 0) {
+      this.duties = [...INITIAL_DUTIES];
+    } else {
+      const dutyNameMap = new Map(this.duties.map((d) => [d.name.toLowerCase().trim(), d]));
+      const dutyCodeMap = new Map(this.duties.map((d) => [d.code.toLowerCase().trim(), d]));
+
+      INITIAL_DUTIES.forEach((initDuty) => {
+        const normName = initDuty.name.toLowerCase().trim();
+        const normCode = initDuty.code.toLowerCase().trim();
+        if (!dutyNameMap.has(normName) && !dutyCodeMap.has(normCode)) {
+          this.duties.push({ ...initDuty });
+          dutyNameMap.set(normName, initDuty);
+          dutyCodeMap.set(normCode, initDuty);
+        }
+      });
+    }
+
+    // 4. Đồng bộ Năm học & Phiên bản
+    if (!this.schoolYears || this.schoolYears.length === 0) {
+      this.schoolYears = [...INITIAL_SCHOOL_YEARS];
+    }
+    if (!this.versions || this.versions.length === 0) {
+      this.versions = [...INITIAL_VERSIONS];
+    }
+
+    // 5. Triệt tiêu phân công kiêm nhiệm trùng lặp
+    this.deduplicateDutyAssignments();
   }
 
   /**
@@ -1000,47 +1081,27 @@ class DataStore {
       };
 
       const loadedTeachers = this.getItem<Teacher[] | null>(this.getScopedKey(STORAGE_KEYS.TEACHERS, schoolId), null);
-      if (isQuyHop) {
-        this.teachers = (loadedTeachers !== null && loadedTeachers.length >= 40)
-          ? loadedTeachers.map((t) => ({ ...t, schoolId: t.schoolId || 'school_quyhop' }))
-          : QUYHOP_TEACHERS.map((t) => ({ ...t, schoolId: 'school_quyhop' }));
-      } else {
-        // Strict tenant isolation: exclude demo seed teachers (tc_gv1..tc_gv20) from tenant schools
-        this.teachers = Array.isArray(loadedTeachers)
-          ? loadedTeachers
-              .filter((t) => (t.schoolId === schoolId || !t.schoolId) && !/^tc_gv\d+$/.test(t.id))
-              .map((t) => ({ ...t, schoolId }))
-          : [];
-      }
+      this.teachers = Array.isArray(loadedTeachers)
+        ? loadedTeachers
+            .filter((t) => (t.schoolId === schoolId || !t.schoolId) && !/^tc_gv\d+$/.test(t.id))
+            .map((t) => ({ ...t, schoolId }))
+        : [];
 
       const loadedClasses = this.getItem<SchoolClass[] | null>(this.getScopedKey(STORAGE_KEYS.CLASSES, schoolId), null);
-      if (isQuyHop) {
-        this.classes = (loadedClasses !== null && loadedClasses.length >= 40)
-          ? loadedClasses.map((c) => ({ ...c, schoolId: c.schoolId || 'school_quyhop' }))
-          : QUYHOP_CLASSES.map((c) => ({ ...c, schoolId: 'school_quyhop' }));
-      } else {
-        this.classes = Array.isArray(loadedClasses)
-          ? loadedClasses.map((c) => ({ ...c, schoolId: c.schoolId || schoolId }))
-          : [];
-      }
+      this.classes = Array.isArray(loadedClasses)
+        ? loadedClasses.map((c) => ({ ...c, schoolId: c.schoolId || schoolId }))
+        : [];
 
       const loadedAssignments = this.getItem<TeachingAssignment[] | null>(this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, schoolId), null);
-      if (isQuyHop) {
-        this.assignments = (loadedAssignments !== null && loadedAssignments.length >= 50) ? loadedAssignments : generateQuyHopAssignments();
-      } else {
-        const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
-        this.assignments = Array.isArray(loadedAssignments)
-          ? loadedAssignments
-              .filter((a) => (a.schoolId === schoolId || !a.schoolId) && validTeacherIds.has(a.teacherId) && !/^tc_gv\d+$/.test(a.teacherId))
-              .map((a) => ({ ...a, schoolId }))
-          : [];
-      }
+      const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
+      this.assignments = Array.isArray(loadedAssignments)
+        ? loadedAssignments
+            .filter((a) => (a.schoolId === schoolId || !a.schoolId) && validTeacherIds.has(a.teacherId) && !/^tc_gv\d+$/.test(a.teacherId))
+            .map((a) => ({ ...a, schoolId }))
+        : [];
 
-      this.branches = this.getItem(this.getScopedKey(STORAGE_KEYS.BRANCHES, schoolId), isQuyHop ? [...QUYHOP_BRANCHES] : [...INITIAL_BRANCHES]);
-      if (isQuyHop && (!this.branches || this.branches.length < 2)) {
-        this.branches = [...QUYHOP_BRANCHES];
-      }
-      this.departments = this.getItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId), isQuyHop ? [...QUYHOP_DEPARTMENTS] : INITIAL_DEPARTMENTS.map((d) => ({
+      this.branches = this.getItem(this.getScopedKey(STORAGE_KEYS.BRANCHES, schoolId), [...INITIAL_BRANCHES]);
+      this.departments = this.getItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId), INITIAL_DEPARTMENTS.map((d) => ({
         ...d,
         schoolId,
         teacherIds: [],
@@ -1049,7 +1110,7 @@ class DataStore {
         deputyTeacherIds: [],
       })));
       this.workplaces = this.getItem(this.getScopedKey(STORAGE_KEYS.WORKPLACES, schoolId), INITIAL_WORKPLACES);
-      this.subjects = this.getItem(this.getScopedKey(STORAGE_KEYS.SUBJECTS, schoolId), [...INITIAL_SUBJECTS]);
+      this.subjects = this.deduplicateSubjectsList(this.getItem(this.getScopedKey(STORAGE_KEYS.SUBJECTS, schoolId), [...INITIAL_SUBJECTS]));
       this.schoolYears = this.getItem(this.getScopedKey(STORAGE_KEYS.SCHOOL_YEARS, schoolId), [...INITIAL_SCHOOL_YEARS]);
       const loadedCurriculum = this.getItem<CurriculumDistribution[] | null>(this.getScopedKey(STORAGE_KEYS.CURRICULUM, schoolId), null);
       this.curriculum = (loadedCurriculum && loadedCurriculum.length > 0)
@@ -1061,22 +1122,30 @@ class DataStore {
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
     } else if (isQuyHop) {
-      // MỞ LẠI DỮ LIỆU CHÍNH THỨC TRƯỜNG THCS QUỲ HỢP (42 LỚP - 74 GV)
+      // DỮ LIỆU SẠCH BAN ĐẦU TRƯỜNG THCS QUỲ HỢP (Chỉ có sẵn môn, khung tiết, chức danh kiêm nhiệm, viết tắt)
       const qLicense = this.getSchoolLicenseById('school_quyhop');
       this.schoolInfo = {
-        ...QUYHOP_SCHOOL_INFO,
-        schoolName: qLicense?.schoolName || QUYHOP_SCHOOL_INFO.schoolName,
-        phone: qLicense?.contactPhone || QUYHOP_SCHOOL_INFO.phone,
-        email: qLicense?.adminEmail || QUYHOP_SCHOOL_INFO.email,
+        ...DEFAULT_SCHOOL_INFO,
+        schoolName: qLicense?.schoolName || DEFAULT_SCHOOL_INFO.schoolName,
+        phone: qLicense?.contactPhone || DEFAULT_SCHOOL_INFO.phone,
+        email: qLicense?.adminEmail || DEFAULT_SCHOOL_INFO.email,
       };
-      this.teachers = [...QUYHOP_TEACHERS];
-      this.classes = [...QUYHOP_CLASSES];
-      this.assignments = generateQuyHopAssignments();
-      this.branches = [...QUYHOP_BRANCHES];
-      this.departments = [...QUYHOP_DEPARTMENTS];
+      this.teachers = [];
+      this.classes = [];
+      this.assignments = [];
+      this.branches = [...INITIAL_BRANCHES];
+      this.departments = INITIAL_DEPARTMENTS.map((d) => ({
+        ...d,
+        schoolId: 'school_quyhop',
+        teacherIds: [],
+        headTeacherId: undefined,
+        deputyTeacherId: undefined,
+        deputyTeacherIds: [],
+      }));
       this.workplaces = [...INITIAL_WORKPLACES];
       this.curriculum = [...INITIAL_CURRICULUM];
       this.duties = [...INITIAL_DUTIES];
+      this.upgradeTenantStandardCatalog(schoolId);
       this.cleanOrphanedAssignments();
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
@@ -1112,7 +1181,7 @@ class DataStore {
       }));
       this.workplaces = [...INITIAL_WORKPLACES];
       this.duties = [...INITIAL_DUTIES];
-      this.subjects = [...INITIAL_SUBJECTS];
+      this.subjects = this.deduplicateSubjectsList([...INITIAL_SUBJECTS]);
       this.schoolYears = [...INITIAL_SCHOOL_YEARS];
       this.versions = [...INITIAL_VERSIONS];
       if (license && license.schoolName) {
@@ -1120,6 +1189,7 @@ class DataStore {
       } else {
         this.setInitialSetupCompleted(false);
       }
+      this.upgradeTenantStandardCatalog(schoolId);
       this.cleanOrphanedAssignments();
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
@@ -1174,6 +1244,45 @@ class DataStore {
 
   private saveDebounceTimer: any = null;
 
+  public hasUnsavedChanges(): boolean {
+    return this.hasUnsavedChangesFlag;
+  }
+
+  public setHasUnsavedChanges(val: boolean) {
+    this.hasUnsavedChangesFlag = val;
+    if (typeof window !== 'undefined') {
+      try {
+        const sId = this.currentSchoolId || 'school_quyhop';
+        localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), val ? 'true' : 'false');
+      } catch {}
+    }
+    this.notify();
+  }
+
+  public saveLocalNow(): void {
+    this.flushStorage();
+    this.setHasUnsavedChanges(false);
+  }
+
+  /**
+   * Hủy bỏ toàn bộ các thay đổi chưa lưu: Khôi phục lại trạng thái đã lưu trước đó từ bộ nhớ
+   */
+  public discardUnsavedChanges(): void {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    const sId = this.currentSchoolId || 'school_quyhop';
+    this.loadTenantData(sId);
+    this.hasUnsavedChangesFlag = false;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), 'false');
+      } catch {}
+    }
+    this.notify();
+  }
+
   public flushStorage() {
     if (this.saveDebounceTimer) {
       clearTimeout(this.saveDebounceTimer);
@@ -1183,6 +1292,15 @@ class DataStore {
   }
 
   private saveToStorage(immediate = false) {
+    if (!this.isInitializing) {
+      this.hasUnsavedChangesFlag = true;
+      if (typeof window !== 'undefined') {
+        try {
+          const sId = this.currentSchoolId || 'school_quyhop';
+          localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), 'true');
+        } catch {}
+      }
+    }
     if (immediate) {
       this.flushStorage();
     } else {
@@ -1210,97 +1328,79 @@ class DataStore {
   // School Information
   public getSchoolInfo(): SchoolInfo {
     const isQuyHop = this.currentSchoolId === 'school_quyhop';
-    const isSuper = isSuperAdminEmail(this.currentUser?.email) || Boolean(this.currentUser?.isSuperAdmin);
     const lic = this.getSchoolLicenseById(this.currentSchoolId);
     const urlParams = this.detectUrlSchoolParams();
+
     let name = this.schoolInfo.schoolName;
-    if (lic && lic.schoolName && lic.schoolName !== 'TRƯỜNG THCS MỚI') {
-      name = lic.schoolName;
-      if (this.schoolInfo.schoolName !== lic.schoolName) {
-        this.schoolInfo.schoolName = lic.schoolName;
-      }
-    } else if (urlParams.schoolId === this.currentSchoolId && urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI') {
-      name = urlParams.schoolName;
-      if (this.schoolInfo.schoolName !== urlParams.schoolName) {
-        this.schoolInfo.schoolName = urlParams.schoolName;
-      }
-    } else if (!isQuyHop && (!name || name.toUpperCase().includes('QUỲ HỢP') || name.toUpperCase().includes('HIM LAM') || name.toUpperCase().includes('THỐNG KÊ'))) {
-      name = 'TRƯỜNG THCS MỚI';
-    }
-
-    let authority = this.schoolInfo.authorityName || '';
-    if (!isQuyHop && (authority.toUpperCase().includes('QUỲ HỢP') || authority.toUpperCase().includes('NGHỆ AN'))) {
-      authority = 'ỦY BAN NHÂN DÂN XÃ';
-    }
-
-    let email = this.schoolInfo.email || '';
-    if (!isQuyHop) {
-      email = lic?.adminEmail || (urlParams.schoolId === this.currentSchoolId ? urlParams.adminEmail : null) || (email && !email.includes('nguyentoanqh') ? email : '');
-    }
-    let phone = this.schoolInfo.phone || '';
-    if (!isQuyHop) {
-      phone = lic?.contactPhone || (phone && phone !== '0961 285 888' && phone !== '0961285888' && phone !== '0961234567' ? phone : '');
-    }
-    let principal = this.schoolInfo.principalName || '';
-    if (!isQuyHop && (principal.includes('Nguyễn Văn Toàn') || !principal)) {
-      principal = lic?.adminName && !lic.adminName.includes('Nguyễn Văn Toàn') ? lic.adminName : 'Nguyễn Văn A';
-    }
-    let dean = this.schoolInfo.deanName || '';
-    if (!isQuyHop && (dean.includes('Trần Văn Minh') || !dean)) {
-      dean = 'Trần Văn B';
-    }
-    let province = this.schoolInfo.provinceName || '';
-    if (!isQuyHop && (province.toUpperCase().includes('QUỲ HỢP') || province.toUpperCase().includes('NGHỆ AN'))) {
-      province = '';
-    }
-    if (isQuyHop) {
-      if (!name) {
-        name = QUYHOP_SCHOOL_INFO.schoolName;
-      }
-      if (!principal) {
-        principal = QUYHOP_SCHOOL_INFO.principalName;
-      }
-      if (!dean) {
-        dean = QUYHOP_SCHOOL_INFO.deanName;
-      }
-      if (!province) {
-        province = QUYHOP_SCHOOL_INFO.provinceName;
-      }
-      if (!phone) {
-        phone = QUYHOP_SCHOOL_INFO.phone;
-      }
-      if (!email) {
-        email = QUYHOP_SCHOOL_INFO.email;
+    if (!name || name === 'TRƯỜNG THCS MỚI') {
+      if (lic && lic.schoolName && lic.schoolName !== 'TRƯỜNG THCS MỚI') {
+        name = lic.schoolName;
+      } else if (urlParams.schoolId === this.currentSchoolId && urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI') {
+        name = urlParams.schoolName;
+      } else if (isQuyHop) {
+        name = 'TRƯỜNG THCS QUỲ HỢP';
       }
     }
 
     return {
       ...this.schoolInfo,
       schoolName: name,
-      authorityName: authority,
-      email,
-      phone,
-      principalName: principal,
-      deanName: dean,
-      provinceName: province,
     };
   }
 
   public setSchoolInfo(info: Partial<SchoolInfo>) {
-    const isSuper = isSuperAdminEmail(this.currentUser?.email) || Boolean(this.currentUser?.isSuperAdmin);
+    this.schoolInfo = { ...this.schoolInfo, ...info };
+
+    // Cập nhật license tương ứng nếu có đổi tên trường, email, số điện thoại hoặc tên hiệu trưởng
     const lic = this.getSchoolLicenseById(this.currentSchoolId);
-    let lockedSchoolName = info.schoolName;
-    if (!isSuper && this.currentSchoolId !== 'school_quyhop') {
-      lockedSchoolName = lic?.schoolName || this.schoolInfo.schoolName;
+    if (lic) {
+      if (info.schoolName && info.schoolName !== lic.schoolName) {
+        lic.schoolName = info.schoolName;
+      }
+      if (info.email && info.email !== lic.adminEmail) {
+        lic.adminEmail = info.email;
+      }
+      if (info.phone && info.phone !== lic.contactPhone) {
+        lic.contactPhone = info.phone;
+      }
+      if (info.principalName && info.principalName !== lic.adminName) {
+        lic.adminName = info.principalName;
+      }
+      this.saveSchoolLicense(lic).catch(() => {});
     }
-    this.schoolInfo = { ...this.schoolInfo, ...info, ...(lockedSchoolName ? { schoolName: lockedSchoolName } : {}) };
-    this.syncAllAssignmentsWithQuotas();
+
+    // Cập nhật registry scoped schoolInfo
+    const scopedKey = this.getScopedKey(STORAGE_KEYS.SCHOOL_INFO, this.currentSchoolId);
+    this.setItem(scopedKey, this.schoolInfo);
+    if (this.currentSchoolId === 'school_quyhop') {
+      this.setItem(STORAGE_KEYS.SCHOOL_INFO, this.schoolInfo);
+    }
+    this.schoolInfoByTenant[this.currentSchoolId] = { ...this.schoolInfo };
+    this.setItem('pccm_school_info_tenants_v1', this.schoolInfoByTenant);
+
+    this.saveLocalCacheOnly();
     this.saveToStorage();
     if (this.currentSchoolId) {
       firestoreRepository.setSchoolInfo(this.currentSchoolId, this.schoolInfo).catch((err) => {
         console.warn('Firestore setSchoolInfo error:', err);
       });
     }
+    this.notify();
+  }
+
+  public setSchoolInfoForSchool(schoolId: string, info: Partial<SchoolInfo>) {
+    if (!schoolId) return;
+    const scopedKey = this.getScopedKey(STORAGE_KEYS.SCHOOL_INFO, schoolId);
+    const existing = this.getItem<SchoolInfo>(scopedKey, DEFAULT_SCHOOL_INFO);
+    const updated = { ...existing, ...info };
+    this.setItem(scopedKey, updated);
+    this.schoolInfoByTenant[schoolId] = updated;
+    this.setItem('pccm_school_info_tenants_v1', this.schoolInfoByTenant);
+    if (schoolId === this.currentSchoolId) {
+      this.schoolInfo = updated;
+      this.notify();
+    }
+    firestoreRepository.setSchoolInfo(schoolId, updated).catch(() => {});
   }
 
   public isInitialSetupCompleted(): boolean {
@@ -1583,10 +1683,7 @@ class DataStore {
   }
 
   public isCurrentUserSuperAdmin(): boolean {
-    if (typeof window !== 'undefined') {
-      if (sessionStorage.getItem('pccm_is_super_admin') === 'true') return true;
-    }
-    return Boolean(this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email));
+    return Boolean(isSuperAdminEmail(this.currentUser?.email));
   }
 
   public setCurrentUser(user: UserProfile) {
@@ -1598,7 +1695,7 @@ class DataStore {
     if (user.schoolId && user.schoolId !== this.currentSchoolId) {
       this.setSchoolId(user.schoolId);
     } else {
-      this.saveToStorage();
+      this.saveLocalCacheOnly();
       this.notify();
     }
   }
@@ -1645,9 +1742,8 @@ class DataStore {
       this.currentUser.schoolId = schoolId;
     }
 
-    // Tự động tải snapshot mới nhất từ Cloud Firestore cho trường này nếu là Super Admin
-    const isSuper = this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email);
-    if (isSuper && schoolId !== 'school_quyhop') {
+    // Tự động tải snapshot mới nhất từ Cloud Firestore cho trường này
+    if (schoolId !== 'school_quyhop') {
       this.pullDataFromFirestore(schoolId).catch(() => {});
     }
 
@@ -1777,7 +1873,6 @@ class DataStore {
   // ===================== QUẢN LÝ BẢN QUYỀN TRƯỜNG HỌC (SCHOOL TENANTS & LICENSES) =====================
   public async loadLicensesFromCloud(): Promise<void> {
     try {
-      const cloudLicenses = await firestoreRepository.getAllSchoolLicenses();
       const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
       const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
       const map = new Map<string, SchoolTenantLicense>();
@@ -1799,12 +1894,15 @@ class DataStore {
         }
       });
 
-      // 4. Đồng bộ thêm từ Cloud Firestore
-      // Luôn đảm bảo các trường thử nghiệm đã xóa không bao giờ còn sót lại trên Cloud
-      firestoreRepository.deleteSchoolLicense('school_thcs_thu_nghiem').catch(() => {});
-      firestoreRepository.deleteSchoolLicense('thcs_thu_nghiem').catch(() => {});
-      firestoreRepository.deleteSchoolLicense('school_thu_nghiem').catch(() => {});
-      firestoreRepository.deleteSchoolLicense('school_thongke').catch(() => {});
+      // 4. Đồng bộ thêm từ Cloud Firestore nếu chưa bị cạn kiệt quota
+      let cloudLicenses: SchoolTenantLicense[] = [];
+      if (!firestoreRepository.hasQuotaExhausted()) {
+        cloudLicenses = await firestoreRepository.getAllSchoolLicenses();
+        firestoreRepository.deleteSchoolLicense('school_thcs_thu_nghiem').catch(() => {});
+        firestoreRepository.deleteSchoolLicense('thcs_thu_nghiem').catch(() => {});
+        firestoreRepository.deleteSchoolLicense('school_thu_nghiem').catch(() => {});
+        firestoreRepository.deleteSchoolLicense('school_thongke').catch(() => {});
+      }
 
       if (cloudLicenses && cloudLicenses.length > 0) {
         cloudLicenses.forEach((cl) => {
@@ -1886,7 +1984,7 @@ class DataStore {
 
         const curClean = (this.currentSchoolId || '').toLowerCase().replace(/^school_/, '');
         const normClean = normId.toLowerCase().replace(/^school_/, '');
-        if ((curClean === normClean || this.currentSchoolId === schoolId || this.currentSchoolId === normId) && normId !== 'school_quyhop') {
+        if (curClean === normClean || this.currentSchoolId === schoolId || this.currentSchoolId === normId) {
           if (cloudLic.schoolName && cloudLic.schoolName !== 'TRƯỜNG THCS MỚI') {
             this.schoolInfo = {
               ...this.schoolInfo,
@@ -1964,12 +2062,22 @@ class DataStore {
       // Tự động kiểm tra và khởi tạo bản quyền nếu liên kết chứa thông số trường hợp lệ (?schoolId=...&schoolName=...)
       const urlParams = this.detectUrlSchoolParams();
       if (urlParams.schoolId === targetId && urlParams.schoolName) {
+        let assignedPass = urlParams.pass || '';
+        if (!assignedPass) {
+          try {
+            const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
+            const bLic = backupLicenses.find((l) => l.id.toLowerCase() === targetId.toLowerCase() || l.id.replace(/^school_/, '').toLowerCase() === targetId.replace(/^school_/, '').toLowerCase());
+            if (bLic?.assignedPasswordHint) {
+              assignedPass = bLic.assignedPasswordHint;
+            }
+          } catch {}
+        }
         const autoLic: SchoolTenantLicense = {
           id: targetId,
           schoolName: urlParams.schoolName,
           adminEmail: urlParams.adminEmail || 'admin@truong.edu.vn',
           adminName: urlParams.adminName || 'Quản trị viên trường',
-          assignedPasswordHint: urlParams.pass || '123456',
+          assignedPasswordHint: assignedPass,
           status: 'active',
           planType: 'annual',
           expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
@@ -2233,7 +2341,7 @@ class DataStore {
 
     const cleanLicense: SchoolTenantLicense = {
       ...license,
-      assignedPasswordHint: license.assignedPasswordHint?.trim() || '123456',
+      assignedPasswordHint: license.assignedPasswordHint?.trim() || (license.id === 'school_quyhop' ? '123456' : ''),
       maxTeachers,
       maxClasses,
       signature,
@@ -2445,6 +2553,9 @@ class DataStore {
         console.warn('Lỗi dọn dẹp localStorage khi xóa trường:', e);
       }
     }
+    delete this.schoolInfoByTenant[schoolId];
+    this.setItem('pccm_school_info_tenants_v1', this.schoolInfoByTenant);
+    this.clearAllOperationalData(schoolId, true);
 
     this.saveToStorage();
     firestoreRepository.deleteSchoolLicense(schoolId).catch(() => {});
@@ -2584,6 +2695,12 @@ class DataStore {
    * Đảm bảo cập nhật tức thời khi có thay đổi mà không bị giật lag
    */
   public initFirestoreRealtimeSync(targetSchoolId?: string) {
+    if (firestoreRepository.hasQuotaExhausted()) {
+      this.stopFirestoreRealtimeSync();
+      this.cloudSyncStatus = 'idle';
+      return;
+    }
+
     const sId = targetSchoolId || this.currentSchoolId || 'school_quyhop';
     this.stopFirestoreRealtimeSync();
 
@@ -2592,177 +2709,252 @@ class DataStore {
 
     ensureFirebaseAuth().catch(() => {});
 
+    const handleSyncError = (err: any) => {
+      if (isQuotaExhaustedError(err) || firestoreRepository.hasQuotaExhausted()) {
+        this.stopFirestoreRealtimeSync();
+        this.cloudSyncStatus = 'idle';
+        this.notify();
+      }
+    };
+
     try {
       // 1. School Info
-      const unsubInfo = firestoreRepository.subscribeSchoolInfo(sId, (cloudInfo) => {
-        if (sId !== this.currentSchoolId) return;
-        if (cloudInfo && cloudInfo.schoolName) {
-          this.schoolInfo = { ...this.schoolInfo, ...cloudInfo };
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubInfo = firestoreRepository.subscribeSchoolInfo(
+        sId,
+        (cloudInfo) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (cloudInfo && cloudInfo.schoolName) {
+            this.schoolInfo = { ...this.schoolInfo, ...cloudInfo };
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubInfo);
 
       // 2. Teachers
-      const unsubTeachers = firestoreRepository.subscribeCollection<Teacher>(sId, 'teachers', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items) {
-          const deduped: Teacher[] = [];
-          const seenIds = new Set<string>();
-          const seenKeys = new Set<string>();
-          for (const item of items) {
-            if (!item || !item.fullName) continue;
-            if (seenIds.has(item.id)) continue;
-            const codeKey = (item.code || '').trim().toUpperCase();
-            const nameKey = removeVietnameseTones(item.fullName.trim());
-            const uniqueKey = codeKey ? `${codeKey}_${nameKey}` : nameKey;
-            if (seenKeys.has(uniqueKey)) continue;
-            seenIds.add(item.id);
-            seenKeys.add(uniqueKey);
-            deduped.push(item);
+      const unsubTeachers = firestoreRepository.subscribeCollection<Teacher>(
+        sId,
+        'teachers',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            const deduped: Teacher[] = [];
+            const seenIds = new Set<string>();
+            const seenKeys = new Set<string>();
+            for (const item of items) {
+              if (!item || !item.fullName) continue;
+              if (seenIds.has(item.id)) continue;
+              const codeKey = (item.code || '').trim().toUpperCase();
+              const nameKey = removeVietnameseTones(item.fullName.trim());
+              const uniqueKey = codeKey ? `${codeKey}_${nameKey}` : nameKey;
+              if (seenKeys.has(uniqueKey)) continue;
+              seenIds.add(item.id);
+              seenKeys.add(uniqueKey);
+              deduped.push(item);
+            }
+            this.teachers = deduped;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
           }
-          this.teachers = deduped;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubTeachers);
 
       // 3. Classes
-      const unsubClasses = firestoreRepository.subscribeCollection<SchoolClass>(sId, 'classes', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items) {
-          const deduped: SchoolClass[] = [];
-          const seenIds = new Set<string>();
-          const seenKeys = new Set<string>();
-          for (const item of items) {
-            if (!item || (!item.code && !item.name)) continue;
-            if (seenIds.has(item.id)) continue;
-            const key = (item.code || item.name || '').trim().toUpperCase();
-            if (seenKeys.has(key)) continue;
-            seenIds.add(item.id);
-            seenKeys.add(key);
-            deduped.push(item);
+      const unsubClasses = firestoreRepository.subscribeCollection<SchoolClass>(
+        sId,
+        'classes',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            const deduped: SchoolClass[] = [];
+            const seenIds = new Set<string>();
+            const seenKeys = new Set<string>();
+            for (const item of items) {
+              if (!item || (!item.code && !item.name)) continue;
+              if (seenIds.has(item.id)) continue;
+              const key = (item.code || item.name || '').trim().toUpperCase();
+              if (seenKeys.has(key)) continue;
+              seenIds.add(item.id);
+              seenKeys.add(key);
+              deduped.push(item);
+            }
+            this.classes = deduped;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
           }
-          this.classes = deduped;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubClasses);
 
       // 4. Subjects
-      const unsubSubjects = firestoreRepository.subscribeCollection<Subject>(sId, 'subjects', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.subjects = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubSubjects = firestoreRepository.subscribeCollection<Subject>(
+        sId,
+        'subjects',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.subjects = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubSubjects);
 
       // 5. Departments
-      const unsubDepts = firestoreRepository.subscribeCollection<Department>(sId, 'departments', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.departments = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubDepts = firestoreRepository.subscribeCollection<Department>(
+        sId,
+        'departments',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.departments = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubDepts);
 
       // 6. Assignments
-      const unsubAssignments = firestoreRepository.subscribeCollection<TeachingAssignment>(sId, 'assignments', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.assignments = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubAssignments = firestoreRepository.subscribeCollection<TeachingAssignment>(
+        sId,
+        'assignments',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.assignments = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubAssignments);
 
       // 7. Versions
-      const unsubVersions = firestoreRepository.subscribeCollection<AssignmentVersion>(sId, 'versions', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.versions = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubVersions = firestoreRepository.subscribeCollection<AssignmentVersion>(
+        sId,
+        'versions',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.versions = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubVersions);
 
       // 8. Curriculum
-      const unsubCurriculum = firestoreRepository.subscribeCollection<CurriculumDistribution>(sId, 'curriculum', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.curriculum = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubCurriculum = firestoreRepository.subscribeCollection<CurriculumDistribution>(
+        sId,
+        'curriculum',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.curriculum = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubCurriculum);
 
       // 9. Duties
-      const unsubDuties = firestoreRepository.subscribeCollection<SpecialDuty>(sId, 'duties', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.duties = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubDuties = firestoreRepository.subscribeCollection<SpecialDuty>(
+        sId,
+        'duties',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.duties = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubDuties);
 
       // 10. Branches
-      const unsubBranches = firestoreRepository.subscribeCollection<SchoolBranch>(sId, 'branches', (items) => {
-        if (sId !== this.currentSchoolId) return;
-        if (items && items.length > 0) {
-          this.branches = items;
-          this.saveLocalCacheOnly();
-          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
-          this.notify();
-        }
-      });
+      const unsubBranches = firestoreRepository.subscribeCollection<SchoolBranch>(
+        sId,
+        'branches',
+        (items) => {
+          if (sId !== this.currentSchoolId) return;
+          if (this.hasUnsavedChangesFlag) return;
+          if (items && items.length > 0) {
+            this.branches = items;
+            this.saveLocalCacheOnly();
+            this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubBranches);
 
       // 11. School Licenses Realtime Subscription
-      const unsubLicenses = firestoreRepository.subscribeAllSchoolLicenses((cloudLicenses) => {
-        if (cloudLicenses && cloudLicenses.length > 0) {
-          const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
-          const map = new Map<string, SchoolTenantLicense>();
-          this.schoolLicenses
-            .filter((l) => !deletedSchoolIds.includes(l.id))
-            .forEach((l) => map.set(l.id, l));
-          cloudLicenses
-            .filter((cl) => !deletedSchoolIds.includes(cl.id))
-            .forEach((cl) => map.set(cl.id, cl));
-          this.schoolLicenses = Array.from(map.values());
-          this.saveLocalCacheOnly();
-          this.notify();
-        }
-      });
+      const unsubLicenses = firestoreRepository.subscribeAllSchoolLicenses(
+        (cloudLicenses) => {
+          if (cloudLicenses && cloudLicenses.length > 0) {
+            const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
+            const map = new Map<string, SchoolTenantLicense>();
+            this.schoolLicenses
+              .filter((l) => !deletedSchoolIds.includes(l.id))
+              .forEach((l) => map.set(l.id, l));
+            cloudLicenses
+              .filter((cl) => !deletedSchoolIds.includes(cl.id))
+              .forEach((cl) => map.set(cl.id, cl));
+            this.schoolLicenses = Array.from(map.values());
+            this.saveLocalCacheOnly();
+            this.notify();
+          }
+        },
+        handleSyncError
+      );
       this.firestoreUnsubscribers.push(unsubLicenses);
 
       this.cloudSyncStatus = 'connected';
       this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
       this.notify();
-    } catch (err) {
-      console.warn('Firestore realtime sync error:', err);
-      this.cloudSyncStatus = 'error';
+    } catch (err: any) {
+      if (isQuotaExhaustedError(err)) {
+        this.stopFirestoreRealtimeSync();
+        this.cloudSyncStatus = 'idle';
+      } else {
+        console.warn('Firestore realtime sync notice:', err?.message || err);
+        this.cloudSyncStatus = 'error';
+      }
       this.notify();
     }
   }
@@ -2772,7 +2964,7 @@ class DataStore {
       try {
         unsub();
       } catch (e) {
-        console.warn('Error unsubscribing', e);
+        // Safe tear down
       }
     });
     this.firestoreUnsubscribers = [];
@@ -2782,12 +2974,17 @@ class DataStore {
    * Helper đồng bộ một tài liệu đơn lẻ lên Firestore trong nền (Background async)
    */
   public syncDocToFirestore(subCollection: FirestoreSubCollection, docId: string, data: any) {
-    if (!this.isFirestoreSyncEnabled || !this.currentSchoolId) return;
+    if (!this.isFirestoreSyncEnabled || !this.currentSchoolId || firestoreRepository.hasQuotaExhausted()) return;
     if (subCollection === 'users' && (docId === 'user_super_admin' || docId === 'user_super_admin_alt' || docId === 'guest_user')) {
       return;
     }
     firestoreRepository.setDocData(this.currentSchoolId, subCollection, docId, data).catch((err) => {
-      console.warn(`Firestore sync error [${subCollection}/${docId}]:`, err);
+      if (isQuotaExhaustedError(err)) {
+        this.stopFirestoreRealtimeSync();
+        this.cloudSyncStatus = 'idle';
+        return;
+      }
+      console.warn(`Firestore sync notice [${subCollection}/${docId}]:`, err?.message || err);
     });
   }
 
@@ -2795,9 +2992,14 @@ class DataStore {
    * Helper xóa một tài liệu khỏi Firestore trong nền (Background async)
    */
   public deleteDocFromFirestore(subCollection: FirestoreSubCollection, docId: string) {
-    if (!this.isFirestoreSyncEnabled || !this.currentSchoolId) return;
+    if (!this.isFirestoreSyncEnabled || !this.currentSchoolId || firestoreRepository.hasQuotaExhausted()) return;
     firestoreRepository.deleteDocData(this.currentSchoolId, subCollection, docId).catch((err) => {
-      console.warn(`Firestore delete error [${subCollection}/${docId}]:`, err);
+      if (isQuotaExhaustedError(err)) {
+        this.stopFirestoreRealtimeSync();
+        this.cloudSyncStatus = 'idle';
+        return;
+      }
+      console.warn(`Firestore delete notice [${subCollection}/${docId}]:`, err?.message || err);
     });
   }
 
@@ -2836,6 +3038,7 @@ class DataStore {
     if (result.success) {
       this.cloudSyncStatus = 'connected';
       this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+      this.setHasUnsavedChanges(false);
     } else {
       this.cloudSyncStatus = 'error';
     }
@@ -2850,6 +3053,16 @@ class DataStore {
     targetSchoolId: string = this.currentSchoolId || 'school_quyhop',
     onProgress?: (step: string, percent: number) => void
   ): Promise<{ success: boolean; totalCount: number; message: string }> {
+    if (firestoreRepository.hasQuotaExhausted()) {
+      this.cloudSyncStatus = 'idle';
+      this.notify();
+      return {
+        success: false,
+        totalCount: 0,
+        message: 'Dung lượng miễn phí Cloud Firestore tạm thời đạt giới hạn hôm nay. Hệ thống đang sử dụng dữ liệu cục bộ (Offline-first) đảm bảo hoạt động bình thường 100%.',
+      };
+    }
+
     this.cloudSyncStatus = 'syncing';
     this.notify();
 
@@ -2885,8 +3098,8 @@ class DataStore {
         this.assignments = cloudAssignments;
       }
 
-      // 5. Tải môn học, tổ chuyên môn, điểm trường, phiên bản
-      onProgress?.('Đang tải tổ chuyên môn & môn học...', 80);
+      // 5. Tải tổ chuyên môn, điểm trường, phiên bản, nhiệm vụ, môn học & PPCT
+      onProgress?.('Đang tải tổ chuyên môn & điểm trường...', 75);
       const cloudDepartments = await firestoreRepository.getCollectionData<Department>(targetSchoolId, 'departments');
       if (cloudDepartments && cloudDepartments.length > 0) {
         this.departments = cloudDepartments;
@@ -2907,9 +3120,24 @@ class DataStore {
         this.duties = cloudDuties;
       }
 
+      onProgress?.('Đang tải môn học & phân phối chương trình...', 85);
+      const cloudSubjects = await firestoreRepository.getCollectionData<Subject>(targetSchoolId, 'subjects');
+      if (cloudSubjects && cloudSubjects.length > 0) {
+        this.subjects = cloudSubjects;
+      }
+
+      const cloudCurriculum = await firestoreRepository.getCollectionData<CurriculumDistribution>(targetSchoolId, 'curriculum');
+      if (cloudCurriculum && cloudCurriculum.length > 0) {
+        this.curriculum = cloudCurriculum;
+      }
+
+      // Tự động nâng cấp danh mục chuẩn (KHTN split Lý/Hóa/Sinh, LS&ĐL Sử/Địa, PPCT chuẩn, Nhiệm vụ kiêm nhiệm)
+      this.upgradeTenantStandardCatalog(targetSchoolId);
+
       onProgress?.('Hoàn tất lưu dữ liệu...', 95);
       this.currentSchoolId = targetSchoolId;
-      this.saveToStorage();
+      this.saveLocalCacheOnly();
+      this.setHasUnsavedChanges(false);
       this.cloudSyncStatus = 'connected';
       this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
       this.notify();
@@ -2927,6 +3155,16 @@ class DataStore {
         message: `Đã tải thành công ${totalCount} bản ghi từ Cloud Firestore về máy cho trường [${this.schoolInfo.schoolName || targetSchoolId}].`,
       };
     } catch (err: any) {
+      if (isQuotaExhaustedError(err)) {
+        this.stopFirestoreRealtimeSync();
+        this.cloudSyncStatus = 'idle';
+        this.notify();
+        return {
+          success: false,
+          totalCount: 0,
+          message: 'Dung lượng miễn phí Cloud Firestore tạm thời đạt giới hạn hôm nay. Hệ thống đang sử dụng dữ liệu cục bộ (Offline-first) đảm bảo hoạt động bình thường 100%.',
+        };
+      }
       this.cloudSyncStatus = 'error';
       this.notify();
       return {
@@ -3008,7 +3246,7 @@ class DataStore {
           this.setSchoolId(profile.schoolId);
         }
         this.currentUser = profile;
-        this.saveToStorage();
+        this.saveLocalCacheOnly();
         this.notify();
         callback?.(profile);
       } else {
@@ -3094,12 +3332,12 @@ class DataStore {
       return this.users.filter((u) => (u.schoolId || 'school_quyhop') === filterSchoolId);
     }
     // Nếu là Super Admin (Thầy Toàn / nguyentoanqh@gmail.com): có thể xem toàn bộ hoặc theo trường
-    if (this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email)) {
+    if (isSuperAdminEmail(this.currentUser?.email)) {
       return [...this.users];
     }
-    // Đối với người dùng/quản trị viên của từng trường: CHỈ xem danh sách người dùng thuộc trường của mình
+    // Đối với người dùng/quản trị viên của từng trường: CHỈ xem danh sách người dùng thuộc trường của mình (không hiển thị tài khoản Super Admin)
     const currentSchool = this.currentSchoolId || this.currentUser?.schoolId || 'school_quyhop';
-    return this.users.filter((u) => (u.schoolId || 'school_quyhop') === currentSchool);
+    return this.users.filter((u) => (u.schoolId || 'school_quyhop') === currentSchool && !isSuperAdminEmail(u.email));
   }
 
   public getUserById(id: string): UserProfile | undefined {
@@ -3215,7 +3453,8 @@ class DataStore {
     this.currentSchoolYearId = schoolYearId;
     this.currentSemesterId = semesterId;
     this.currentVersionId = versionId;
-    this.saveToStorage();
+    this.saveLocalCacheOnly();
+    this.notify();
   }
 
   // Getters
@@ -3620,20 +3859,17 @@ class DataStore {
       list = list.filter((c) => c.schoolId === this.currentSchoolId);
     } else {
       list = list.filter((c) => !c.schoolId || c.schoolId === 'school_quyhop');
-      if (list.length < 40) {
-        this.classes = QUYHOP_CLASSES.map((c) => ({ ...c, schoolId: 'school_quyhop' }));
-        list = includeDeleted ? this.classes : this.classes.filter((c) => !c.isDeleted);
-      }
     }
     return [...list];
   }
 
   public getSubjects(): Subject[] {
     const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
-    if (isQuyHop) {
-      return this.subjects.filter((s) => !s.schoolId || s.schoolId === 'school_quyhop');
-    }
-    return this.subjects.filter((s) => !s.schoolId || s.schoolId === this.currentSchoolId);
+    const list = isQuyHop
+      ? this.subjects.filter((s) => !s.schoolId || s.schoolId === 'school_quyhop')
+      : this.subjects.filter((s) => !s.schoolId || s.schoolId === this.currentSchoolId);
+
+    return this.deduplicateSubjectsList(list);
   }
 
   public getCurriculum(schoolYearId?: string, semesterId?: SemesterId): CurriculumDistribution[] {
@@ -3670,6 +3906,133 @@ class DataStore {
       }
       return true;
     });
+    this.deduplicateDutyAssignments();
+  }
+
+  /**
+   * Khử trùng lặp triệt để các nhiệm vụ kiêm nhiệm / miễn giảm:
+   * Tuyệt đối không cho phép 1 người được giao 2 lần cùng một nhiệm vụ trong cùng một phiên bản phân công.
+   * Đồng thời đồng bộ và làm sạch danh sách teacher.positions của từng giáo viên.
+   */
+  public deduplicateDutyAssignments(): number {
+    let removedCount = 0;
+    const isDutyAsg = (a: TeachingAssignment) =>
+      !a.isDeleted &&
+      (a.type === 'CONCURRENT' ||
+        a.type === 'EXEMPTION' ||
+        a.type === 'CONCURRENT_DUTY' ||
+        Boolean(a.dutyId) ||
+        Boolean(a.dutyName));
+
+    // Nhóm các phân công kiêm nhiệm theo (versionId + teacherId)
+    const grouped = new Map<string, TeachingAssignment[]>();
+
+    for (const a of this.assignments) {
+      if (!isDutyAsg(a)) continue;
+      const groupKey = `${a.schoolYearId || this.currentSchoolYearId}_${a.semesterId || this.currentSemesterId}_${a.versionId || this.currentVersionId}_${a.teacherId}`;
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, []);
+      }
+      grouped.get(groupKey)!.push(a);
+    }
+
+    const idsToDelete = new Set<string>();
+
+    for (const [, asgList] of grouped.entries()) {
+      if (asgList.length <= 1) continue;
+
+      // Nhóm theo canonical duty identity
+      const dutyBuckets = new Map<string, TeachingAssignment[]>();
+
+      for (const a of asgList) {
+        let canonicalKey = '';
+        const rawName = (a.dutyName || '').trim();
+        const cleanName = rawName.replace(/\s*\([^)]*\)/g, '').trim();
+        const normName = normalizePositionName(cleanName).toLowerCase();
+
+        // 1. Tổ trưởng chuyên môn
+        if (this.isHeadDepartmentDuty(a.dutyId, a.dutyName)) {
+          canonicalKey = 'head_dept';
+        }
+        // 2. Tổ phó chuyên môn
+        else if (this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)) {
+          canonicalKey = 'deputy_dept';
+        }
+        // 3. Chủ nhiệm lớp cụ thể
+        else if (a.classId || normName.startsWith('chủ nhiệm lớp ') || cleanName.toLowerCase().startsWith('chủ nhiệm lớp ')) {
+          const cls = this.classes.find((c) => c.id === a.classId || (a.dutyName && a.dutyName.includes(c.name)));
+          canonicalKey = `homeroom_${cls ? cls.name.toLowerCase() : cleanName.toLowerCase()}`;
+        }
+        // 4. Các nhiệm vụ khác: dựa trên normName hoặc cleanName
+        else if (normName) {
+          canonicalKey = `duty_${normName}`;
+        } else if (a.dutyId) {
+          canonicalKey = `duty_id_${a.dutyId.toLowerCase()}`;
+        } else {
+          canonicalKey = `duty_raw_${cleanName.toLowerCase()}`;
+        }
+
+        if (!dutyBuckets.has(canonicalKey)) {
+          dutyBuckets.set(canonicalKey, []);
+        }
+        dutyBuckets.get(canonicalKey)!.push(a);
+      }
+
+      // Với mỗi canonical duty, nếu có từ 2 phân công trở lên -> giữ 1, xóa các bản sao trùng lặp
+      for (const [, bucket] of dutyBuckets.entries()) {
+        if (bucket.length <= 1) continue;
+
+        bucket.sort((x, y) => {
+          const xPeriods = x.periodsPerWeek || 0;
+          const yPeriods = y.periodsPerWeek || 0;
+          if (xPeriods !== yPeriods) return yPeriods - xPeriods;
+          if (x.status === 'approved' && y.status !== 'approved') return -1;
+          if (y.status === 'approved' && x.status !== 'approved') return 1;
+          const xIsSync = x.id.startsWith('as_sync_pos_');
+          const yIsSync = y.id.startsWith('as_sync_pos_');
+          if (!xIsSync && yIsSync) return -1;
+          if (xIsSync && !yIsSync) return 1;
+          return 0;
+        });
+
+        const duplicates = bucket.slice(1);
+
+        for (const dup of duplicates) {
+          idsToDelete.add(dup.id);
+          dup.isDeleted = true;
+          removedCount++;
+          // Xóa đồng bộ trên Cloud Firestore
+          const safeDocId = dup.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+          firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
+        }
+      }
+    }
+
+    if (idsToDelete.size > 0) {
+      this.assignments = this.assignments.filter((a) => !idsToDelete.has(a.id));
+    }
+
+    // Đồng thời làm sạch và khử trùng lặp teacher.positions cho tất cả giáo viên
+    for (const teacher of this.teachers) {
+      if (!Array.isArray(teacher.positions) || teacher.positions.length <= 1) continue;
+      const seenPosNorm = new Set<string>();
+      const dedupedPositions: string[] = [];
+      for (const pos of teacher.positions) {
+        const clean = pos.replace(/\s*\([^)]*\)/g, '').trim();
+        const norm = normalizePositionName(clean);
+        const normKey = (norm || clean).toLowerCase();
+        if (!seenPosNorm.has(normKey)) {
+          seenPosNorm.add(normKey);
+          dedupedPositions.push(pos);
+        }
+      }
+      if (dedupedPositions.length !== teacher.positions.length) {
+        teacher.positions = dedupedPositions;
+        firestoreRepository.setDocData(this.currentSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
+      }
+    }
+
+    return removedCount;
   }
 
   public getAssignments(
@@ -3682,6 +4045,9 @@ class DataStore {
       this.assignments = generateQuyHopAssignments();
     }
     const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    if (!isQuyHop && this.teachers.length === 0) {
+      return [];
+    }
     const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
 
     return this.assignments.filter(
@@ -3871,11 +4237,16 @@ class DataStore {
         if (deletedItem.teacherId) {
           const t = this.teachers.find((tc) => tc.id === deletedItem.teacherId);
           if (t && Array.isArray(t.positions) && t.positions.length > 0) {
-            const dName = (deletedItem.dutyName || '').trim().toLowerCase();
+            const rawClean = (deletedItem.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+            const normClean = normalizePositionName(rawClean).toLowerCase();
             const dId = (deletedItem.dutyId || '').trim().toLowerCase();
             t.positions = t.positions.filter((pos) => {
               const cleanPos = pos.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-              if (dName && (cleanPos === dName || dName.includes(cleanPos) || cleanPos.includes(dName))) {
+              const normPos = normalizePositionName(cleanPos).toLowerCase();
+              if (normClean && (normPos === normClean || cleanPos === normClean || cleanPos === rawClean)) {
+                return false;
+              }
+              if (rawClean && (cleanPos.includes(rawClean) || rawClean.includes(cleanPos))) {
                 return false;
               }
               const slug = cleanPos.replace(/[^a-z0-9_-]+/g, '_');
@@ -4243,6 +4614,11 @@ class DataStore {
       }
     }
 
+    // Đồng bộ chức vụ kiêm nhiệm, danh mục duties và bảng phân công assignments ngay lập tức
+    if (newTeacher.positions && newTeacher.positions.length > 0) {
+      this.syncTeacherPositions(newTeacher.id, newTeacher.positions, newTeacher.departmentId);
+    }
+
     this.logAction({
       action: 'CREATE',
       entityType: 'TEACHER',
@@ -4308,6 +4684,13 @@ class DataStore {
       }
     });
 
+    // Đồng bộ chức vụ kiêm nhiệm, danh mục duties và bảng phân công cho các giáo viên vừa tạo
+    created.forEach((t) => {
+      if (t.positions && t.positions.length > 0) {
+        this.syncTeacherPositions(t.id, t.positions, t.departmentId);
+      }
+    });
+
     this.logAction({
       action: 'CREATE',
       entityType: 'TEACHER',
@@ -4335,6 +4718,7 @@ class DataStore {
   ): { addedCount: number; updatedCount: number; totalProcessed: number; teachers: Teacher[] } {
     let addedCount = 0;
     let updatedCount = 0;
+    const newlyAddedTeachers: Teacher[] = [];
     const defaultWp = this.workplaces.find((w) => w.isDefault) || this.workplaces[0];
     const timestamp = Date.now();
 
@@ -4457,6 +4841,7 @@ class DataStore {
         };
 
         this.teachers.push(newTeacher);
+        newlyAddedTeachers.push(newTeacher);
 
         const dept = this.departments.find((d) => d.id === newTeacher.departmentId);
         if (dept) {
@@ -4470,6 +4855,13 @@ class DataStore {
       }
     });
 
+    // Đồng bộ chức vụ kiêm nhiệm, danh mục duties và bảng phân công cho các giáo viên mới thêm
+    newlyAddedTeachers.forEach((t) => {
+      if (t.positions && t.positions.length > 0) {
+        this.syncTeacherPositions(t.id, t.positions, t.departmentId);
+      }
+    });
+
     this.logAction({
       action: 'UPDATE',
       entityType: 'TEACHER',
@@ -4477,6 +4869,8 @@ class DataStore {
       entityDescription: `Đồng bộ hồ sơ giáo viên gốc: thêm mới ${addedCount}, cập nhật ${updatedCount}`,
     });
 
+    this.syncAllDepartmentDutiesAndAssignments();
+    this.syncAllAssignmentsWithQuotas();
     this.saveToStorage();
     this.notify();
     return {
@@ -4554,8 +4948,21 @@ class DataStore {
       reason,
     });
 
-    this.syncAllDepartmentDutiesAndAssignments();
+    if (resolvedUpdates.positions) {
+      this.syncTeacherPositions(id, resolvedUpdates.positions, newDeptId);
+    } else if (resolvedUpdates.departmentId && oldDeptId !== newDeptId) {
+      this.syncTeacherPositions(id, this.teachers[index].positions || [], newDeptId);
+    } else {
+      this.syncAllDepartmentDutiesAndAssignments();
+    }
+
+    try {
+      const targetSId = this.teachers[index].schoolId || this.currentSchoolId || 'school_quyhop';
+      firestoreRepository.setDocData(targetSId, 'teachers', id, this.teachers[index]).catch(() => {});
+    } catch {}
+
     this.saveToStorage();
+    this.notify();
     return true;
   }
 
@@ -4567,14 +4974,13 @@ class DataStore {
     const teacher = this.teachers.find((t) => t.id === teacherId);
     if (!teacher) return false;
 
-    // Chuẩn hóa và loại bỏ trùng lặp chức vụ (ví dụ "Tổ trưởng" và "Tổ trưởng chuyên môn" gom về 1)
+    // Chuẩn hóa và loại bỏ trùng lặp chức vụ
     const normalizedPositions: string[] = Array.from(
       new Set((positions || []).map((p) => normalizePositionName(p)).filter((p): p is string => Boolean(p)))
     );
-    teacher.positions = [...normalizedPositions];
     const deptId = departmentId || teacher.departmentId;
 
-    // Synchronize BGH Status
+    // 1. Đồng bộ trạng thái BGH (Hiệu trưởng / Phó hiệu trưởng)
     const isPrincipal = normalizedPositions.some(
       (p) => p.toLowerCase() === 'hiệu trưởng' || (p.toLowerCase().includes('hiệu trưởng') && !p.toLowerCase().includes('phó'))
     );
@@ -4583,21 +4989,23 @@ class DataStore {
     if (isPrincipal) {
       teacher.status = 'PRINCIPAL';
       teacher.statusLabel = 'Hiệu trưởng';
+      if (!teacher.standardQuota || teacher.standardQuota === 19) teacher.standardQuota = 2;
     } else if (isVicePrincipal) {
       teacher.status = 'VICE_PRINCIPAL';
       teacher.statusLabel = 'Phó hiệu trưởng';
+      if (!teacher.standardQuota || teacher.standardQuota === 19) teacher.standardQuota = 4;
     } else if (teacher.status === 'PRINCIPAL' || teacher.status === 'VICE_PRINCIPAL') {
       teacher.status = 'ACTIVE';
       teacher.statusLabel = 'Đang giảng dạy';
+      if (teacher.standardQuota === 2 || teacher.standardQuota === 4) teacher.standardQuota = 19;
     }
 
-    // Synchronize Department roles
+    // 2. Đồng bộ vai trò Tổ trưởng / Tổ phó trong Department
     const isHead = normalizedPositions.some((p) => p.toLowerCase().includes('tổ trưởng') || p.toLowerCase().includes('to truong'));
     const isDeputy = normalizedPositions.some((p) => p.toLowerCase().includes('tổ phó') || p.toLowerCase().includes('to pho'));
 
-    // Cập nhật vai trò Tổ trưởng / Tổ phó trong tất cả các tổ
     this.departments.forEach((dept) => {
-      // 1. Xử lý Tổ trưởng
+      // 2.1 Xử lý Tổ trưởng
       if (!isHead && dept.headTeacherId === teacherId) {
         dept.headTeacherId = undefined;
       } else if (isHead && dept.id === deptId) {
@@ -4606,7 +5014,7 @@ class DataStore {
         dept.headTeacherId = undefined;
       }
 
-      // 2. Xử lý Tổ phó
+      // 2.2 Xử lý Tổ phó
       if (!Array.isArray(dept.deputyTeacherIds)) {
         dept.deputyTeacherIds = dept.deputyTeacherId ? [dept.deputyTeacherId] : [];
       }
@@ -4624,96 +5032,353 @@ class DataStore {
       }
     });
 
-    // Đồng bộ phân công kiêm nhiệm: Khi người dùng xóa vị trí/kiêm nhiệm trong modal
+    // 3. Phân tích các nhiệm vụ kiêm nhiệm / miễn giảm đang được gán
+    const activeVersionId = this.currentVersionId || this.versions[0]?.id || 'ver_hk1_official';
+    const activeSchoolYearId = this.currentSchoolYearId || 'sy_2026_2027';
+    const activeSemesterId = this.currentSemesterId || 'HK1';
+    const weeks = activeSemesterId === 'HK1' ? 18 : 17;
+
     const normalizedPosLowerSet = new Set(normalizedPositions.map((p) => p.toLowerCase()));
 
-    // 1. Xóa phân công kiêm nhiệm Tổ trưởng nếu isHead = false
+    // 3.1 Dọn dẹp phân công kiêm nhiệm cũ nếu không còn trong danh sách vị trí đã chọn
+    // - Tổ trưởng:
     if (!isHead) {
+      const removedHead = this.assignments.filter(
+        (a) => a.teacherId === teacherId && a.type === 'CONCURRENT' && this.isHeadDepartmentDuty(a.dutyId, a.dutyName)
+      );
+      removedHead.forEach((a) => {
+        const safeDocId = a.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+        firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
+      });
       this.assignments = this.assignments.filter(
         (a) => !(a.teacherId === teacherId && a.type === 'CONCURRENT' && this.isHeadDepartmentDuty(a.dutyId, a.dutyName))
       );
     }
-    // 2. Xóa phân công kiêm nhiệm Tổ phó nếu isDeputy = false
+    // - Tổ phó:
     if (!isDeputy) {
+      const removedDep = this.assignments.filter(
+        (a) => a.teacherId === teacherId && a.type === 'CONCURRENT' && this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)
+      );
+      removedDep.forEach((a) => {
+        const safeDocId = a.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+        firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
+      });
       this.assignments = this.assignments.filter(
         (a) => !(a.teacherId === teacherId && a.type === 'CONCURRENT' && this.isDeputyDepartmentDuty(a.dutyId, a.dutyName))
       );
     }
-    // 3. Xóa các phân công kiêm nhiệm khác nếu không còn trong danh sách vị trí đã chọn
+    // - Chủ nhiệm lớp:
+    const activeHomeroomPositions = normalizedPositions.filter(
+      (p) => p.startsWith('Chủ nhiệm lớp ') || p.toLowerCase().startsWith('chủ nhiệm')
+    );
+    const activeHomeroomLowerSet = new Set(activeHomeroomPositions.map((p) => p.toLowerCase()));
+    this.classes.forEach((cls) => {
+      if (cls.homeroomTeacherId === teacherId) {
+        const clsNorm = `chủ nhiệm lớp ${cls.name.toLowerCase()}`;
+        if (!activeHomeroomLowerSet.has(clsNorm) && !activeHomeroomPositions.some((p) => p.toLowerCase().includes(cls.name.toLowerCase()))) {
+          cls.homeroomTeacherId = undefined;
+          firestoreRepository.setDocData(this.currentSchoolId, 'classes', cls.id, cls).catch(() => {});
+          // Xóa phân công chủ nhiệm của lớp này
+          const removedHr = this.assignments.filter(
+            (a) => a.teacherId === teacherId && (a.classId === cls.id || (a.dutyName && a.dutyName.toLowerCase().includes(cls.name.toLowerCase())))
+          );
+          removedHr.forEach((a) => {
+            const safeDocId = a.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+            firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
+          });
+          this.assignments = this.assignments.filter(
+            (a) => !(a.teacherId === teacherId && (a.classId === cls.id || (a.dutyName && a.dutyName.toLowerCase().includes(cls.name.toLowerCase()))))
+          );
+        }
+      }
+    });
+
+    // - Các nhiệm vụ kiêm nhiệm / miễn giảm khác:
     this.assignments = this.assignments.filter((a) => {
-      if (a.teacherId !== teacherId || a.type !== 'CONCURRENT' || a.isDeleted) return true;
+      if (a.teacherId !== teacherId || a.isDeleted) return true;
+      if (a.type !== 'CONCURRENT' && a.type !== 'EXEMPTION' && a.type !== 'CONCURRENT_DUTY' && !a.dutyId) {
+        return true;
+      }
       if (this.isHeadDepartmentDuty(a.dutyId, a.dutyName) || this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)) {
+        return true; // Đã xử lý ở trên
+      }
+      if (a.classId || (a.dutyName && a.dutyName.toLowerCase().includes('chủ nhiệm'))) {
         return true; // Đã xử lý ở trên
       }
       const rawDutyName = (a.dutyName || this.duties.find((d) => d.id === a.dutyId)?.name || '').replace(/\s*\([^)]*\)/g, '').trim();
       const normDutyName = normalizePositionName(rawDutyName).toLowerCase();
-      // Nếu tên nhiệm vụ kiêm nhiệm này không còn trong danh sách vị trí đã chọn thì xóa phân công
       if (normDutyName && !normalizedPosLowerSet.has(normDutyName) && !normalizedPosLowerSet.has(rawDutyName.toLowerCase())) {
+        const safeDocId = a.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+        firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
         return false;
       }
       return true;
     });
 
-    // 4. Tự động sinh phân công kiêm nhiệm cho các vị trí mới được chọn
-    const activeVersionId = this.currentVersionId || 'ver_hk1_official';
-    const activeSchoolYearId = this.currentSchoolYearId || 'sy_2026_2027';
-    const activeSemesterId = this.currentSemesterId || 'HK1';
-    const weeks = activeSemesterId === 'HK1' ? 18 : 17;
-
+    // 4. Đồng bộ vào duties và sinh/cập nhật assignments cho TẤT CẢ các vị trí kiêm nhiệm được chọn
     for (const pos of normalizedPositions) {
-      if (
-        pos === 'Hiệu trưởng' ||
-        pos === 'Phó hiệu trưởng' ||
-        pos === 'Tổ trưởng chuyên môn' ||
-        pos === 'Tổ phó chuyên môn' ||
-        pos.startsWith('Chủ nhiệm lớp')
-      ) {
+      if (pos === 'Hiệu trưởng' || pos === 'Phó hiệu trưởng') {
         continue;
       }
-      const normPos = normalizePositionName(pos).toLowerCase();
-      const hasAssignment = this.assignments.some(
-        (a) =>
-          a.teacherId === teacherId &&
-          a.type === 'CONCURRENT' &&
-          !a.isDeleted &&
-          (normalizePositionName((a.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase() === normPos ||
-            (a.dutyName || '').toLowerCase().includes(normPos))
-      );
-      if (!hasAssignment) {
-        const matchingDuty = this.duties.find(
-          (d) =>
-            normalizePositionName(d.name).toLowerCase() === normPos ||
-            d.name.toLowerCase().includes(normPos) ||
-            normPos.includes(normalizePositionName(d.name).toLowerCase())
+
+      // 4.1 Xử lý Tổ trưởng chuyên môn
+      if (pos === 'Tổ trưởng chuyên môn' || pos.toLowerCase().includes('tổ trưởng')) {
+        const headDuty = this.getHeadDepartmentDuty();
+        const existingHead = this.assignments.find(
+          (a) => !a.isDeleted && a.teacherId === teacherId && a.versionId === activeVersionId && this.isHeadDepartmentDuty(a.dutyId, a.dutyName)
         );
-        const periods = matchingDuty ? matchingDuty.periodsPerWeekCalculated || matchingDuty.periodsPerWeekExempted || 2 : 2;
-        const dutyId = matchingDuty ? matchingDuty.id : `duty_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        const dutyName = matchingDuty ? matchingDuty.name : pos;
-        this.assignments.push({
-          id: `asg_duty_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        const periods = headDuty.periodsPerWeekCalculated || 3;
+        if (!existingHead) {
+          const asg: TeachingAssignment = {
+            id: `asg_duty_head_${teacherId}_${activeVersionId}`,
+            schoolId: this.currentSchoolId,
+            schoolYearId: activeSchoolYearId,
+            semesterId: activeSemesterId,
+            versionId: activeVersionId,
+            teacherId,
+            departmentId: deptId || '',
+            type: 'CONCURRENT',
+            dutyId: headDuty.id,
+            dutyName: headDuty.name,
+            session: 'ACTIVITY',
+            periodsPerWeek: periods,
+            weeks,
+            totalPeriods: periods * weeks,
+            status: 'approved',
+            notes: `Đồng bộ kiêm nhiệm: ${headDuty.name}`,
+            createdAt: new Date().toISOString(),
+            createdBy: this.currentUser?.email || 'admin',
+          };
+          this.assignments.push(asg);
+          firestoreRepository.setDocData(this.currentSchoolId, 'assignments', asg.id, asg).catch(() => {});
+        } else {
+          existingHead.periodsPerWeek = periods;
+          existingHead.totalPeriods = periods * weeks;
+          existingHead.dutyId = headDuty.id;
+          existingHead.dutyName = headDuty.name;
+          firestoreRepository.setDocData(this.currentSchoolId, 'assignments', existingHead.id, existingHead).catch(() => {});
+        }
+        continue;
+      }
+
+      // 4.2 Xử lý Tổ phó chuyên môn
+      if (pos === 'Tổ phó chuyên môn' || pos.toLowerCase().includes('tổ phó')) {
+        const depDuty = this.getDeputyDepartmentDuty();
+        const existingDep = this.assignments.find(
+          (a) => !a.isDeleted && a.teacherId === teacherId && a.versionId === activeVersionId && this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)
+        );
+        const periods = depDuty.periodsPerWeekCalculated || 1;
+        if (!existingDep) {
+          const asg: TeachingAssignment = {
+            id: `asg_duty_dep_${teacherId}_${activeVersionId}`,
+            schoolId: this.currentSchoolId,
+            schoolYearId: activeSchoolYearId,
+            semesterId: activeSemesterId,
+            versionId: activeVersionId,
+            teacherId,
+            departmentId: deptId || '',
+            type: 'CONCURRENT',
+            dutyId: depDuty.id,
+            dutyName: depDuty.name,
+            session: 'ACTIVITY',
+            periodsPerWeek: periods,
+            weeks,
+            totalPeriods: periods * weeks,
+            status: 'approved',
+            notes: `Đồng bộ kiêm nhiệm: ${depDuty.name}`,
+            createdAt: new Date().toISOString(),
+            createdBy: this.currentUser?.email || 'admin',
+          };
+          this.assignments.push(asg);
+          firestoreRepository.setDocData(this.currentSchoolId, 'assignments', asg.id, asg).catch(() => {});
+        } else {
+          existingDep.periodsPerWeek = periods;
+          existingDep.totalPeriods = periods * weeks;
+          existingDep.dutyId = depDuty.id;
+          existingDep.dutyName = depDuty.name;
+          firestoreRepository.setDocData(this.currentSchoolId, 'assignments', existingDep.id, existingDep).catch(() => {});
+        }
+        continue;
+      }
+
+      // 4.3 Xử lý Chủ nhiệm lớp
+      if (pos.startsWith('Chủ nhiệm lớp ') || pos.toLowerCase().startsWith('chủ nhiệm')) {
+        const classNamePart = pos.replace(/^(Chủ nhiệm lớp|Chủ nhiệm|GVCN)\s*/i, '').trim();
+        const matchedClass = this.classes.find(
+          (c) => !c.isDeleted && (c.name.toLowerCase() === classNamePart.toLowerCase() || c.code?.toLowerCase() === classNamePart.toLowerCase())
+        );
+        const homeroomDuty = this.duties.find((d) => d.code === 'CHU_NHIEM' || d.id === 'duty_chu_nhiem') || {
+          id: 'duty_chu_nhiem',
+          code: 'CHU_NHIEM',
+          name: 'Chủ nhiệm lớp',
+          type: 'CONCURRENT' as const,
+          periodsPerWeekCalculated: 4,
+          periodsPerWeekExempted: 0,
+          applicationMode: 'BY_CLASS' as const,
+        };
+        if (!this.duties.some((d) => d.code === 'CHU_NHIEM' || d.id === homeroomDuty.id)) {
+          this.duties.push(homeroomDuty);
+        }
+        if (matchedClass) {
+          matchedClass.homeroomTeacherId = teacherId;
+          firestoreRepository.setDocData(this.currentSchoolId, 'classes', matchedClass.id, matchedClass).catch(() => {});
+        }
+        const existingHr = this.assignments.find(
+          (a) => !a.isDeleted && a.teacherId === teacherId && a.versionId === activeVersionId &&
+            (a.classId === matchedClass?.id || (a.dutyName && a.dutyName.toLowerCase().includes(classNamePart.toLowerCase())))
+        );
+        if (!existingHr) {
+          const asg: TeachingAssignment = {
+            id: `asg_duty_cn_${teacherId}_${matchedClass?.id || 'class'}_${activeVersionId}`,
+            schoolId: this.currentSchoolId,
+            schoolYearId: activeSchoolYearId,
+            semesterId: activeSemesterId,
+            versionId: activeVersionId,
+            teacherId,
+            departmentId: deptId || '',
+            classId: matchedClass?.id,
+            type: 'CONCURRENT',
+            dutyId: homeroomDuty.id,
+            dutyName: matchedClass ? `Chủ nhiệm lớp ${matchedClass.name}` : pos,
+            session: 'ACTIVITY',
+            periodsPerWeek: 4,
+            weeks,
+            totalPeriods: 4 * weeks,
+            status: 'approved',
+            notes: `Đồng bộ kiêm nhiệm: Chủ nhiệm lớp ${matchedClass?.name || classNamePart}`,
+            createdAt: new Date().toISOString(),
+            createdBy: this.currentUser?.email || 'admin',
+          };
+          this.assignments.push(asg);
+          firestoreRepository.setDocData(this.currentSchoolId, 'assignments', asg.id, asg).catch(() => {});
+        }
+        continue;
+      }
+
+      // 4.4 Xử lý các nhiệm vụ kiêm nhiệm / miễn giảm khác
+      const cleanPos = pos.replace(/\s*\([^)]*\)/g, '').trim();
+      const normPos = normalizePositionName(cleanPos).toLowerCase();
+      const defaultStatutory = getDefaultDutyPeriodsAndType(cleanPos);
+
+      // Trích xuất số tiết từ ngoặc nếu có: ví dụ "Bí thư Chi đoàn (2 tiết/tuần)"
+      const pMatch =
+        pos.match(/\((\d+)\s*(?:tiết\/tuần|tiết|t\/tuần|t)?\b[^)]*\)/i) ||
+        pos.match(/\((\d+)[^)]*\)/i) ||
+        pos.match(/(\d+)\s*(?:tiết|t)\b/i);
+      const pFromPos = pMatch ? parseInt(pMatch[1], 10) : 0;
+
+      let matchingDuty = this.duties.find((d) => {
+        const normD = normalizePositionName(d.name.replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase();
+        return (
+          normD === normPos ||
+          d.name.toLowerCase() === cleanPos.toLowerCase() ||
+          normPos.includes(normD) ||
+          normD.includes(normPos)
+        );
+      });
+
+      const isExempt = matchingDuty?.type === 'EXEMPTION' || defaultStatutory?.type === 'EXEMPTION' || cleanPos.toLowerCase().includes('miễn') || cleanPos.toLowerCase().includes('con nhỏ');
+      let periods = matchingDuty
+        ? (matchingDuty.periodsPerWeekCalculated || matchingDuty.periodsPerWeekExempted || pFromPos || defaultStatutory?.periods || 2)
+        : (pFromPos || defaultStatutory?.periods || 2);
+
+      // NẾU CHƯA CÓ TRONG DUTIES -> TỰ ĐỘNG THÊM VÀO DUTIES ĐỂ ĐỒNG BỘ
+      if (!matchingDuty) {
+        const codeBase = cleanPos
+          .toUpperCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Z0-9]/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 15) || `DUTY_${Date.now().toString(36).toUpperCase()}`;
+        const newDuty: SpecialDuty = {
+          id: `duty_${codeBase.toLowerCase()}`,
+          code: codeBase,
+          name: normalizePositionName(cleanPos) || cleanPos,
+          type: isExempt ? 'EXEMPTION' : 'CONCURRENT',
+          periodsPerWeekCalculated: isExempt ? 0 : periods,
+          periodsPerWeekExempted: isExempt ? periods : 0,
+          applicationMode: 'FIXED',
+          notes: 'Tự động thêm vào danh mục khi gán chức vụ cho giáo viên',
+        };
+        this.duties.push(newDuty);
+        matchingDuty = newDuty;
+        firestoreRepository.setDocData(this.currentSchoolId, 'duties', newDuty.id, newDuty).catch(() => {});
+      }
+
+      // Kiểm tra và sinh/cập nhật phân công trong assignments
+      const existingAsg = this.assignments.find((a) => {
+        if (a.teacherId !== teacherId || a.isDeleted || a.versionId !== activeVersionId) return false;
+        if (a.dutyId && (a.dutyId === matchingDuty?.id || a.dutyId === matchingDuty?.code)) return true;
+        const aNorm = normalizePositionName((a.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase();
+        return aNorm === normPos || (a.dutyName || '').toLowerCase().includes(cleanPos.toLowerCase());
+      });
+
+      if (!existingAsg) {
+        const asgId = `asg_duty_${teacherId}_${matchingDuty.id.replace(/[^a-z0-9_-]/gi, '_')}_${activeVersionId}`;
+        const newAsg: TeachingAssignment = {
+          id: asgId,
           schoolId: this.currentSchoolId,
           schoolYearId: activeSchoolYearId,
           semesterId: activeSemesterId,
           versionId: activeVersionId,
           teacherId,
           departmentId: deptId || '',
-          type: 'CONCURRENT',
-          dutyId,
-          dutyName,
+          type: isExempt ? 'EXEMPTION' : 'CONCURRENT',
+          dutyId: matchingDuty.id,
+          dutyName: matchingDuty.name || cleanPos,
           session: 'ACTIVITY',
           periodsPerWeek: periods,
           weeks,
           totalPeriods: periods * weeks,
           status: 'approved',
-          notes: `Đồng bộ tự động từ vị trí công việc: ${pos}`,
+          notes: `Đồng bộ kiêm nhiệm: ${matchingDuty.name || cleanPos}`,
           createdAt: new Date().toISOString(),
           createdBy: this.currentUser?.email || 'admin',
-        });
+        };
+        this.assignments.push(newAsg);
+        firestoreRepository.setDocData(this.currentSchoolId, 'assignments', newAsg.id, newAsg).catch(() => {});
+      } else {
+        existingAsg.periodsPerWeek = periods;
+        existingAsg.weeks = weeks;
+        existingAsg.totalPeriods = periods * weeks;
+        existingAsg.dutyId = matchingDuty.id;
+        existingAsg.dutyName = matchingDuty.name || cleanPos;
+        existingAsg.type = isExempt ? 'EXEMPTION' : 'CONCURRENT';
+        existingAsg.isDeleted = false;
+        existingAsg.status = 'approved';
+        firestoreRepository.setDocData(this.currentSchoolId, 'assignments', existingAsg.id, existingAsg).catch(() => {});
       }
     }
 
-    this.syncAllDepartmentDutiesAndAssignments();
+    // 5. Cập nhật teacher.positions với định dạng hiển thị đẹp (có số tiết)
+    const formattedPositions: string[] = [];
+    for (const p of normalizedPositions) {
+      if (p === 'Hiệu trưởng' || p === 'Phó hiệu trưởng') {
+        formattedPositions.push(p);
+      } else {
+        const defaultStat = getDefaultDutyPeriodsAndType(p);
+        const matched = this.duties.find(
+          (d) => normalizePositionName(d.name).toLowerCase() === p.toLowerCase() || d.name.toLowerCase() === p.toLowerCase()
+        );
+        const periods = matched
+          ? (matched.periodsPerWeekCalculated || matched.periodsPerWeekExempted || defaultStat?.periods || 0)
+          : (defaultStat?.periods || 0);
+        if (periods > 0 && !p.includes('(')) {
+          formattedPositions.push(`${p} (${periods} tiết/tuần)`);
+        } else {
+          formattedPositions.push(p);
+        }
+      }
+    }
+    teacher.positions = formattedPositions;
+
+    // 6. Lưu giáo viên lên Firestore
+    firestoreRepository.setDocData(this.currentSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
+
+    this.deduplicateDutyAssignments();
     this.saveToStorage();
+    this.notify();
     return true;
   }
 
@@ -6084,468 +6749,195 @@ class DataStore {
   }
 
   /**
-   * Đồng bộ hai chiều toàn diện giữa Mục 5. Tổ chuyên môn và Phân công chuyên môn (kiêm nhiệm):
-   * 1. Chức vụ Tổ trưởng (3 tiết) / Tổ phó (1 tiết) gán trong Mục 5 tự động sinh phân công kiêm nhiệm cho giáo viên trong mọi phiên bản phân công.
-   * 2. Ngược lại, khi phân công kiêm nhiệm Tổ trưởng / Tổ phó trong Phân công chuyên môn, tự động cập nhật vào Mục 5. Tổ chuyên môn.
-   * 3. Tự động đồng bộ vị trí trong teacher.positions và gán giáo viên vào đúng tổ chuyên môn.
+   * ĐỒNG BỘ TẤT CẢ VỊ TRÍ, CHỨC VỤ VÀ TỔ CHUYÊN MÔN TỪ GỐC (PHÂN CÔNG KIÊM NHIỆM).
+   * Nguyên tắc nền tảng:
+   * 1. Mục Kiêm nhiệm (Assignments of type CONCURRENT/EXEMPTION/CONCURRENT_DUTY) LÀ GỐC (Single Source of Truth).
+   * 2. Đồng bộ XUỐI sang:
+   *    - teacher.positions (vị trí công tác của từng giáo viên)
+   *    - departments.headTeacherId / deputyTeacherIds (Tổ trưởng / Tổ phó chuyên môn)
+   *    - classes.homeroomTeacherId (Giáo viên chủ nhiệm lớp)
+   * 3. Tuyệt đối KHÔNG tự động đẩy ngược (auto-push) từ departments, classes hay positions vào assignments để tránh sinh trùng lặp.
    */
-  public syncAllDepartmentDutiesAndAssignments(): void {
+  public syncDutyAssignmentsToAllModules(schoolId: string = this.currentSchoolId, targetVersionId?: string): void {
     if (this.isSyncingDepartmentDuties) return;
     this.isSyncingDepartmentDuties = true;
 
     try {
-      const headDuty = this.getHeadDepartmentDuty();
-      const depDuty = this.getDeputyDepartmentDuty();
-      const targetVersions =
-        this.versions.length > 0
-          ? this.versions
-          : [
-              {
-                id: this.currentVersionId || 'ver_hk1_official',
-                semesterId: this.currentSemesterId || 'HK1',
-                schoolYearId: this.currentSchoolYearId || 'sy_2026_2027',
-                name: 'Phiên bản chính thức',
-              },
-            ];
+      // 1. Triệt tiêu triệt để mọi phân công kiêm nhiệm trùng lặp (cùng giáo viên + cùng nhiệm vụ + cùng version)
+      this.deduplicateDutyAssignments();
 
-      // BƯỚC 1: ĐỒNG BỘ TỪ PHÂN CÔNG CHUYÊN MÔN -> MỤC 5. TỔ CHUYÊN MÔN
-      for (const asg of this.assignments) {
-        if (asg.isDeleted || asg.type !== 'CONCURRENT') continue;
-        const teacher = this.teachers.find((t) => t.id === asg.teacherId && !t.isDeleted);
-        if (!teacher) continue;
+      const activeVerId = targetVersionId || this.currentVersionId || this.versions[0]?.id || 'ver_hk1_official';
+      const isQuyHop = !schoolId || schoolId === 'school_quyhop';
 
-        const isHead = this.isHeadDepartmentDuty(asg.dutyId, asg.dutyName);
-        const isDep = this.isDeputyDepartmentDuty(asg.dutyId, asg.dutyName);
-        if (!isHead && !isDep) continue;
+      // 2. Lấy tất cả phân công kiêm nhiệm hợp lệ của phiên bản hiện tại (hoặc tất cả phiên bản)
+      const activeDutyAssignments = this.assignments.filter(
+        (a) =>
+          !a.isDeleted &&
+          (isQuyHop ? (!a.schoolId || a.schoolId === 'school_quyhop') : (a.schoolId === schoolId)) &&
+          (a.versionId === activeVerId || !a.versionId) &&
+          (a.type === 'CONCURRENT' ||
+            a.type === 'EXEMPTION' ||
+            a.type === 'CONCURRENT_DUTY' ||
+            Boolean(a.dutyId) ||
+            Boolean(a.dutyName))
+      );
 
-        const targetDeptId = asg.departmentId || teacher.departmentId;
-        const dept =
-          this.departments.find((d) => d.id === targetDeptId) ||
-          this.departments.find((d) => Array.isArray(d.teacherIds) && d.teacherIds.includes(teacher.id));
-        if (!dept) continue;
-
-        asg.departmentId = dept.id;
-        teacher.departmentId = dept.id;
-        if (!Array.isArray(dept.teacherIds)) dept.teacherIds = [];
-        if (!dept.teacherIds.includes(teacher.id)) dept.teacherIds.push(teacher.id);
-
-        if (isHead) {
-          dept.headTeacherId = teacher.id;
-          if (!Array.isArray(teacher.positions)) teacher.positions = [];
-          if (!teacher.positions.some((p) => p.toLowerCase().includes('tổ trưởng') || p.toLowerCase().includes('to truong'))) {
-            teacher.positions.push('Tổ trưởng chuyên môn');
-          }
-        } else if (isDep) {
-          if (!Array.isArray(dept.deputyTeacherIds)) {
-            dept.deputyTeacherIds = dept.deputyTeacherId ? [dept.deputyTeacherId] : [];
-          }
-          if (!dept.deputyTeacherIds.includes(teacher.id)) {
-            dept.deputyTeacherIds.push(teacher.id);
-          }
-          dept.deputyTeacherId = dept.deputyTeacherIds[0];
-          if (!Array.isArray(teacher.positions)) teacher.positions = [];
-          if (!teacher.positions.some((p) => p.toLowerCase().includes('tổ phó') || p.toLowerCase().includes('to pho'))) {
-            teacher.positions.push('Tổ phó chuyên môn');
-          }
+      // Nhóm theo giáo viên
+      const dutyByTeacher = new Map<string, TeachingAssignment[]>();
+      for (const a of activeDutyAssignments) {
+        if (!dutyByTeacher.has(a.teacherId)) {
+          dutyByTeacher.set(a.teacherId, []);
         }
+        dutyByTeacher.get(a.teacherId)!.push(a);
       }
 
-      // BƯỚC 2: ĐỒNG BỘ TỪ MỤC 5. TỔ CHUYÊN MÔN -> PHÂN CÔNG CHUYÊN MÔN (KIÊM NHIỆM)
-      for (const dept of this.departments) {
-        // 2.1. Tổ trưởng (3 tiết/tuần)
-        if (dept.headTeacherId) {
-          const head = this.teachers.find((t) => t.id === dept.headTeacherId && !t.isDeleted);
-          if (head) {
-            head.departmentId = dept.id;
-            if (!Array.isArray(dept.teacherIds)) dept.teacherIds = [];
-            if (!dept.teacherIds.includes(head.id)) dept.teacherIds.push(head.id);
+      // 3. ĐỒNG BỘ SANG teacher.positions CHO TẤT CẢ GIÁO VIÊN
+      for (const teacher of this.teachers) {
+        if (teacher.isDeleted) continue;
+        if (!isQuyHop && teacher.schoolId && teacher.schoolId !== schoolId) continue;
 
-            if (!Array.isArray(head.positions)) head.positions = [];
-            if (!head.positions.some((p) => p.toLowerCase().includes('tổ trưởng') || p.toLowerCase().includes('to truong'))) {
-              head.positions.push('Tổ trưởng chuyên môn');
-            }
-
-            for (const ver of targetVersions) {
-              const existingHeadAsg = this.assignments.find(
-                (a) =>
-                  !a.isDeleted &&
-                  a.versionId === ver.id &&
-                  a.teacherId === head.id &&
-                  a.type === 'CONCURRENT' &&
-                  this.isHeadDepartmentDuty(a.dutyId, a.dutyName)
-              );
-
-              if (!existingHeadAsg) {
-                const weeks = ver.semesterId === 'HK1' ? 18 : 17;
-                const periods = headDuty.periodsPerWeekCalculated || 3;
-                this.assignments.push({
-                  id: `as_sync_head_${dept.id}_${head.id}_${ver.id}_${Math.random().toString(36).substring(2, 6)}`,
-                  schoolId: this.currentSchoolId,
-                  schoolYearId: ver.schoolYearId || this.currentSchoolYearId,
-                  semesterId: ver.semesterId || this.currentSemesterId,
-                  versionId: ver.id,
-                  teacherId: head.id,
-                  departmentId: dept.id,
-                  type: 'CONCURRENT',
-                  dutyId: headDuty.id,
-                  dutyName: headDuty.name,
-                  session: 'ACTIVITY',
-                  periodsPerWeek: periods,
-                  weeks,
-                  totalPeriods: periods * weeks,
-                  status: 'approved',
-                  notes: `Tự động đồng bộ từ Mục 5. Tổ chuyên môn (${dept.name})`,
-                  createdAt: new Date().toISOString(),
-                  createdBy: this.currentUser?.name || 'Hệ thống',
-                });
-              } else {
-                if (!existingHeadAsg.departmentId) existingHeadAsg.departmentId = dept.id;
-                const headPeriods = headDuty.periodsPerWeekCalculated || 3;
-                if (existingHeadAsg.periodsPerWeek !== headPeriods) {
-                  existingHeadAsg.periodsPerWeek = headPeriods;
-                  existingHeadAsg.totalPeriods = headPeriods * (existingHeadAsg.weeks || (ver.semesterId === 'HK1' ? 18 : 17));
-                }
+        // Giữ lại các chức vụ hành chính đặc thù (Ban giám hiệu, Cấp ủy) nếu không nằm trong danh mục kiêm nhiệm
+        const preservedAdminRoles: string[] = [];
+        if (Array.isArray(teacher.positions)) {
+          for (const pos of teacher.positions) {
+            const cleanPos = pos.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+            if (
+              cleanPos === 'hiệu trưởng' ||
+              cleanPos === 'phó hiệu trưởng' ||
+              cleanPos === 'bí thư chi bộ' ||
+              cleanPos === 'phó bí thư chi bộ'
+            ) {
+              if (!preservedAdminRoles.includes(pos)) {
+                preservedAdminRoles.push(pos);
               }
             }
           }
         }
 
-        // 2.2. Tổ phó (1 tiết/tuần)
-        const rawDeputies = Array.isArray(dept.deputyTeacherIds) && dept.deputyTeacherIds.length > 0
+        const teacherDuties = dutyByTeacher.get(teacher.id) || [];
+        const newPositionsSet = new Set<string>(preservedAdminRoles);
+
+        for (const asg of teacherDuties) {
+          let posTitle = '';
+          const cleanName = (asg.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim();
+          const canonical = normalizePositionName(cleanName) || cleanName;
+
+          if (this.isHeadDepartmentDuty(asg.dutyId, asg.dutyName)) {
+            posTitle = 'Tổ trưởng chuyên môn';
+          } else if (this.isDeputyDepartmentDuty(asg.dutyId, asg.dutyName)) {
+            posTitle = 'Tổ phó chuyên môn';
+          } else if (asg.classId || canonical.toLowerCase().includes('chủ nhiệm')) {
+            const cls = this.classes.find((c) => c.id === asg.classId || (asg.dutyName && asg.dutyName.includes(c.name)));
+            posTitle = cls ? `Chủ nhiệm lớp ${cls.name}` : canonical;
+          } else {
+            posTitle = canonical;
+          }
+
+          if (posTitle) {
+            const periods = asg.periodsPerWeek || 0;
+            const formatted = periods > 0 ? `${posTitle} (${periods} tiết/tuần)` : posTitle;
+            newPositionsSet.add(formatted);
+          }
+        }
+
+        const finalPositions = Array.from(newPositionsSet);
+        const prevJoined = (teacher.positions || []).join(';');
+        const newJoined = finalPositions.join(';');
+        if (prevJoined !== newJoined) {
+          teacher.positions = finalPositions;
+          firestoreRepository.setDocData(this.currentSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
+        }
+      }
+
+      // 4. ĐỒNG BỘ SANG departments (TỔ TRƯỞNG & TỔ PHÓ CHUYÊN MÔN)
+      const headTeachersFromDuties = new Set<string>();
+      const deputyTeachersFromDuties = new Set<string>();
+
+      for (const asg of activeDutyAssignments) {
+        if (this.isHeadDepartmentDuty(asg.dutyId, asg.dutyName)) {
+          headTeachersFromDuties.add(asg.teacherId);
+        }
+        if (this.isDeputyDepartmentDuty(asg.dutyId, asg.dutyName)) {
+          deputyTeachersFromDuties.add(asg.teacherId);
+        }
+      }
+
+      for (const dept of this.departments) {
+        if (!isQuyHop && dept.schoolId && dept.schoolId !== schoolId) continue;
+        const prevHead = dept.headTeacherId;
+        const prevDeputies = (dept.deputyTeacherIds || []).join(',');
+
+        // Cập nhật Tổ trưởng:
+        if (dept.headTeacherId && !headTeachersFromDuties.has(dept.headTeacherId)) {
+          dept.headTeacherId = undefined;
+        }
+        for (const tId of headTeachersFromDuties) {
+          const t = this.teachers.find((tc) => tc.id === tId && !tc.isDeleted);
+          if (t && (t.departmentId === dept.id || (Array.isArray(dept.teacherIds) && dept.teacherIds.includes(tId)))) {
+            dept.headTeacherId = tId;
+            break;
+          }
+        }
+
+        // Cập nhật Tổ phó:
+        const currentDeputies = Array.isArray(dept.deputyTeacherIds)
           ? dept.deputyTeacherIds
           : dept.deputyTeacherId
           ? [dept.deputyTeacherId]
           : [];
-        const deputyIds = Array.from(new Set(rawDeputies.filter(Boolean)));
-        dept.deputyTeacherIds = deputyIds;
-        dept.deputyTeacherId = deputyIds[0] || undefined;
-
-        for (const deputyId of deputyIds) {
-          const deputy = this.teachers.find((t) => t.id === deputyId && !t.isDeleted);
-          if (deputy) {
-            deputy.departmentId = dept.id;
-            if (!Array.isArray(dept.teacherIds)) dept.teacherIds = [];
-            if (!dept.teacherIds.includes(deputy.id)) dept.teacherIds.push(deputy.id);
-
-            if (!Array.isArray(deputy.positions)) deputy.positions = [];
-            if (!deputy.positions.some((p) => p.toLowerCase().includes('tổ phó') || p.toLowerCase().includes('to pho'))) {
-              deputy.positions.push('Tổ phó chuyên môn');
-            }
-
-            for (const ver of targetVersions) {
-              const existingDepAsg = this.assignments.find(
-                (a) =>
-                  !a.isDeleted &&
-                  a.versionId === ver.id &&
-                  a.teacherId === deputy.id &&
-                  a.type === 'CONCURRENT' &&
-                  this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)
-              );
-
-              if (!existingDepAsg) {
-                const weeks = ver.semesterId === 'HK1' ? 18 : 17;
-                const periods = depDuty.periodsPerWeekCalculated || 1;
-                this.assignments.push({
-                  id: `as_sync_dep_${dept.id}_${deputy.id}_${ver.id}_${Math.random().toString(36).substring(2, 6)}`,
-                  schoolId: this.currentSchoolId,
-                  schoolYearId: ver.schoolYearId || this.currentSchoolYearId,
-                  semesterId: ver.semesterId || this.currentSemesterId,
-                  versionId: ver.id,
-                  teacherId: deputy.id,
-                  departmentId: dept.id,
-                  type: 'CONCURRENT',
-                  dutyId: depDuty.id,
-                  dutyName: depDuty.name,
-                  session: 'ACTIVITY',
-                  periodsPerWeek: periods,
-                  weeks,
-                  totalPeriods: periods * weeks,
-                  status: 'approved',
-                  notes: `Tự động đồng bộ từ Mục 5. Tổ chuyên môn (${dept.name})`,
-                  createdAt: new Date().toISOString(),
-                  createdBy: this.currentUser?.name || 'Hệ thống',
-                });
-              } else {
-                if (!existingDepAsg.departmentId) existingDepAsg.departmentId = dept.id;
-                const depPeriods = depDuty.periodsPerWeekCalculated || 1;
-                if (existingDepAsg.periodsPerWeek !== depPeriods) {
-                  existingDepAsg.periodsPerWeek = depPeriods;
-                  existingDepAsg.totalPeriods = depPeriods * (existingDepAsg.weeks || (ver.semesterId === 'HK1' ? 18 : 17));
-                }
-              }
+        let nextDeputies = currentDeputies.filter((tid) => deputyTeachersFromDuties.has(tid));
+        for (const tId of deputyTeachersFromDuties) {
+          const t = this.teachers.find((tc) => tc.id === tId && !tc.isDeleted);
+          if (t && (t.departmentId === dept.id || (Array.isArray(dept.teacherIds) && dept.teacherIds.includes(tId)))) {
+            if (!nextDeputies.includes(tId)) {
+              nextDeputies.push(tId);
             }
           }
         }
+        dept.deputyTeacherIds = nextDeputies;
+        dept.deputyTeacherId = nextDeputies[0] || undefined;
+
+        if (prevHead !== dept.headTeacherId || prevDeputies !== (dept.deputyTeacherIds || []).join(',')) {
+          firestoreRepository.setDocData(this.currentSchoolId, 'departments', dept.id, dept).catch(() => {});
+        }
       }
 
-      // BƯỚC 3: DỌN DẸP PHÂN CÔNG KIÊM NHIỆM NẾU VAI TRÒ ĐÃ BỊ HỦY Ở MỤC 5
-      for (const dept of this.departments) {
-        this.assignments = this.assignments.filter((a) => {
-          if (
-            !a.isDeleted &&
-            a.departmentId === dept.id &&
-            a.type === 'CONCURRENT' &&
-            this.isHeadDepartmentDuty(a.dutyId, a.dutyName)
-          ) {
-            return a.teacherId === dept.headTeacherId;
-          }
-          return true;
-        });
-
-        const activeDeputies = new Set(dept.deputyTeacherIds || []);
-        this.assignments = this.assignments.filter((a) => {
-          if (
-            !a.isDeleted &&
-            a.departmentId === dept.id &&
-            a.type === 'CONCURRENT' &&
-            this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)
-          ) {
-            return activeDeputies.has(a.teacherId);
-          }
-          return true;
-        });
-      }
-
-      // BƯỚC 4: ĐỒNG BỘ CHỦ NHIỆM LỚP (TỪ LỚP HỌC SANG PHÂN CÔNG VÀ TEACHER.POSITIONS)
-      const homeroomDuty = this.duties.find((d) => d.code === 'CHU_NHIEM' || d.id === 'duty_chu_nhiem') || {
-        id: 'duty_chu_nhiem',
-        code: 'CHU_NHIEM',
-        name: 'Giáo viên chủ nhiệm',
-        periodsPerWeekCalculated: 4,
-      };
-
+      // 5. ĐỒNG BỘ SANG classes (GIÁO VIÊN CHỦ NHIỆM)
+      const homeroomAssignments = activeDutyAssignments.filter(
+        (a) => a.classId || (a.dutyName && a.dutyName.toLowerCase().includes('chủ nhiệm'))
+      );
       for (const cls of this.classes) {
-        if (cls.isDeleted || !cls.homeroomTeacherId) continue;
-        const hrTeacher = this.teachers.find((t) => t.id === cls.homeroomTeacherId && !t.isDeleted);
-        if (!hrTeacher) continue;
+        if (cls.isDeleted) continue;
+        if (!isQuyHop && cls.schoolId && cls.schoolId !== schoolId) continue;
+        const prevHomeroom = cls.homeroomTeacherId;
 
-        for (const ver of targetVersions) {
-          const existingHrAsg = this.assignments.find(
-            (a) =>
-              !a.isDeleted &&
-              a.versionId === ver.id &&
-              a.teacherId === hrTeacher.id &&
-              (a.classId === cls.id || (a.dutyName && a.dutyName.toLowerCase().includes(cls.name.toLowerCase()))) &&
-              (a.type === 'CONCURRENT' || (a.dutyName && a.dutyName.toLowerCase().includes('chủ nhiệm')))
+        const hrAsg = homeroomAssignments.find(
+          (a) => a.classId === cls.id || (a.dutyName && a.dutyName.toLowerCase().includes(cls.name.toLowerCase()))
+        );
+        if (hrAsg) {
+          cls.homeroomTeacherId = hrAsg.teacherId;
+        } else if (cls.homeroomTeacherId) {
+          const stillAssigned = homeroomAssignments.some(
+            (a) => a.teacherId === cls.homeroomTeacherId && (a.classId === cls.id || (a.dutyName && a.dutyName.includes(cls.name)))
           );
-
-          if (!existingHrAsg) {
-            const weeks = ver.semesterId === 'HK1' ? 18 : 17;
-            const periods = homeroomDuty.periodsPerWeekCalculated || 4;
-            this.assignments.push({
-              id: `as_sync_cn_${cls.id}_${hrTeacher.id}_${ver.id}_${Math.random().toString(36).substring(2, 6)}`,
-              schoolId: this.currentSchoolId,
-              schoolYearId: ver.schoolYearId || this.currentSchoolYearId,
-              semesterId: ver.semesterId || this.currentSemesterId,
-              versionId: ver.id,
-              teacherId: hrTeacher.id,
-              departmentId: hrTeacher.departmentId,
-              classId: cls.id,
-              type: 'CONCURRENT',
-              dutyId: homeroomDuty.id,
-              dutyName: `Chủ nhiệm lớp ${cls.name}`,
-              session: 'ACTIVITY',
-              periodsPerWeek: periods,
-              weeks,
-              totalPeriods: periods * weeks,
-              status: 'approved',
-              notes: `Tự động đồng bộ từ Giáo viên chủ nhiệm lớp ${cls.name}`,
-              createdAt: new Date().toISOString(),
-              createdBy: this.currentUser?.name || 'Hệ thống',
-            });
+          if (!stillAssigned) {
+            cls.homeroomTeacherId = undefined;
           }
+        }
+
+        if (prevHomeroom !== cls.homeroomTeacherId) {
+          firestoreRepository.setDocData(this.currentSchoolId, 'classes', cls.id, cls).catch(() => {});
         }
       }
-
-      // BƯỚC 4.5: ĐỒNG BỘ CÁC NHIỆM VỤ KIÊM NHIỆM KHÁC TỪ TEACHER.POSITIONS -> PHÂN CÔNG CHUYÊN MÔN
-      for (const teacher of this.teachers) {
-        if (teacher.isDeleted || !Array.isArray(teacher.positions)) continue;
-        if (this.currentSchoolId !== 'school_quyhop' && teacher.schoolId && teacher.schoolId !== this.currentSchoolId) continue;
-        if (this.currentSchoolId !== 'school_quyhop' && /^tc_gv\d+$/.test(teacher.id)) continue;
-
-        for (const pos of teacher.positions) {
-          const cleanPos = pos.replace(/\s*\([^)]*\)/g, '').trim();
-          if (
-            cleanPos.toLowerCase().includes('tổ trưởng') ||
-            cleanPos.toLowerCase().includes('tổ phó') ||
-            cleanPos.toLowerCase().includes('chủ nhiệm') ||
-            cleanPos.toLowerCase() === 'hiệu trưởng' ||
-            cleanPos.toLowerCase() === 'phó hiệu trưởng'
-          ) {
-            continue;
-          }
-
-          const pMatch =
-            pos.match(/\((\d+)\s*(?:tiết\/tuần|tiết|t\/tuần|t)?\b[^)]*\)/i) ||
-            pos.match(/\((\d+)[^)]*\)/i) ||
-            pos.match(/(\d+)\s*(?:tiết|t)\b/i);
-          let pFromPos = pMatch ? parseInt(pMatch[1], 10) : 0;
-
-          const matchedDuty = this.duties.find(
-            (d) =>
-              d.name.toLowerCase() === pos.toLowerCase() ||
-              d.name.toLowerCase() === cleanPos.toLowerCase() ||
-              cleanPos.toLowerCase().includes(d.name.toLowerCase()) ||
-              d.name.toLowerCase().includes(cleanPos.toLowerCase())
-          );
-
-          let periods = matchedDuty
-            ? (matchedDuty.periodsPerWeekCalculated || matchedDuty.periodsPerWeekExempted || pFromPos || 0)
-            : pFromPos;
-
-          if (periods <= 0 && pFromPos > 0) periods = pFromPos;
-          if (periods <= 0) continue;
-
-          const cleanDutySlug = cleanPos.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
-          const dutyId = matchedDuty?.id
-            ? matchedDuty.id.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_')
-            : `duty_custom_${cleanDutySlug || 'nv'}`;
-          const dutyName = matchedDuty?.name || cleanPos;
-          const isExempt = matchedDuty?.type === 'EXEMPTION' || pos.toLowerCase().includes('miễn');
-
-          for (const ver of targetVersions) {
-            const weeks = ver.semesterId === 'HK1' ? 18 : 17;
-            // Nếu người dùng đã chủ động xóa phân công này thì không tự động hồi sinh
-            const wasDeleted = this.assignments.some(
-              (a) =>
-                a.isDeleted &&
-                a.versionId === ver.id &&
-                a.teacherId === teacher.id &&
-                (a.dutyId === dutyId ||
-                  (a.dutyName && (a.dutyName.toLowerCase().includes(cleanPos.toLowerCase()) || cleanPos.toLowerCase().includes(a.dutyName.toLowerCase()))))
-            );
-            if (wasDeleted) {
-              continue;
-            }
-
-            const existingAsg = this.assignments.find(
-              (a) =>
-                !a.isDeleted &&
-                a.versionId === ver.id &&
-                a.teacherId === teacher.id &&
-                (a.type === 'CONCURRENT' || a.type === 'EXEMPTION' || a.type === 'CONCURRENT_DUTY') &&
-                (a.dutyId === dutyId ||
-                  (a.dutyName && (a.dutyName.toLowerCase().includes(cleanPos.toLowerCase()) || cleanPos.toLowerCase().includes(a.dutyName.toLowerCase()))))
-            );
-
-            if (existingAsg) {
-              if (existingAsg.periodsPerWeek !== periods) {
-                existingAsg.periodsPerWeek = periods;
-                existingAsg.weeks = weeks;
-                existingAsg.totalPeriods = periods * weeks;
-                existingAsg.dutyName = dutyName;
-                existingAsg.dutyId = dutyId;
-              }
-            } else {
-              const safeTeacherId = teacher.id.replace(/[\/\\]+/g, '_');
-              const safeDutyId = dutyId.replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
-              const safeVerId = ver.id.replace(/[\/\\]+/g, '_');
-              this.assignments.push({
-                id: `as_sync_pos_${safeTeacherId}_${safeDutyId}_${safeVerId}_${Math.random().toString(36).substring(2, 6)}`,
-                schoolId: this.currentSchoolId,
-                schoolYearId: ver.schoolYearId || this.currentSchoolYearId,
-                semesterId: ver.semesterId || this.currentSemesterId,
-                versionId: ver.id,
-                teacherId: teacher.id,
-                departmentId: teacher.departmentId,
-                type: isExempt ? 'EXEMPTION' : 'CONCURRENT',
-                dutyId,
-                dutyName,
-                session: 'ACTIVITY',
-                periodsPerWeek: periods,
-                weeks,
-                totalPeriods: periods * weeks,
-                status: 'approved',
-                notes: `Tự động đồng bộ từ vị trí kiêm nhiệm: ${dutyName}`,
-                createdAt: new Date().toISOString(),
-                createdBy: this.currentUser?.name || 'Hệ thống',
-              });
-            }
-          }
-        }
-      }
-
-      // BƯỚC 5: ĐỒNG BỘ LẠI teacher.positions (Chuẩn hóa và triệt tiêu trùng lặp cho TẤT CẢ chức vụ & kiêm nhiệm)
-      for (const teacher of this.teachers) {
-        if (teacher.isDeleted) continue;
-
-        if (!Array.isArray(teacher.positions)) teacher.positions = [];
-
-        const isHead =
-          this.departments.some((d) => d.headTeacherId === teacher.id) ||
-          this.assignments.some(
-            (a) => !a.isDeleted && a.teacherId === teacher.id && a.type === 'CONCURRENT' && this.isHeadDepartmentDuty(a.dutyId, a.dutyName)
-          );
-        const isDep =
-          this.departments.some((d) => Array.isArray(d.deputyTeacherIds) && d.deputyTeacherIds.includes(teacher.id)) ||
-          this.assignments.some(
-            (a) => !a.isDeleted && a.teacherId === teacher.id && a.type === 'CONCURRENT' && this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)
-          );
-
-        const homeroomClasses = this.classes.filter((c) => !c.isDeleted && c.homeroomTeacherId === teacher.id);
-
-        const posSet = new Set<string>();
-        teacher.positions.forEach((p) => {
-          const norm = normalizePositionName(p);
-          if (norm) posSet.add(norm);
-        });
-
-        // Thêm từ homeroom classes
-        homeroomClasses.forEach((c) => {
-          posSet.add(`Chủ nhiệm lớp ${c.name}`);
-        });
-
-        // Thêm từ assignments (kiêm nhiệm, thư ký, v.v.)
-        this.assignments.forEach((asg) => {
-          if (asg.teacherId === teacher.id && !asg.isDeleted) {
-            if (
-              asg.type === 'CONCURRENT' ||
-              asg.type === 'CONCURRENT_DUTY' ||
-              asg.type === 'EXEMPTION' ||
-              Boolean(asg.dutyId) ||
-              Boolean(asg.dutyName)
-            ) {
-              let dName = asg.dutyName;
-              if (!dName && asg.dutyId) {
-                const found = this.duties.find((d) => d.id === asg.dutyId || d.code === asg.dutyId);
-                if (found) dName = found.name;
-              }
-              if (dName) {
-                const clean = dName.replace(/\s*\([^)]*\)/g, '').trim();
-                const norm = normalizePositionName(clean);
-                if (norm) posSet.add(norm);
-              }
-            }
-          }
-        });
-
-        if (isHead) {
-          posSet.add('Tổ trưởng chuyên môn');
-        } else {
-          posSet.delete('Tổ trưởng chuyên môn');
-          posSet.delete('Tổ trưởng');
-        }
-
-        if (isDep) {
-          posSet.add('Tổ phó chuyên môn');
-        } else {
-          posSet.delete('Tổ phó chuyên môn');
-          posSet.delete('Tổ phó');
-        }
-
-        // Khử trùng lặp: nếu đã có "Chủ nhiệm lớp X" thì không cần "Giáo viên chủ nhiệm" chung chung
-        const list = Array.from(posSet);
-        const hasSpecificCN = list.some((p) => p.startsWith('Chủ nhiệm lớp '));
-        teacher.positions = list.filter((p) => {
-          if (hasSpecificCN && p === 'Giáo viên chủ nhiệm') return false;
-          return true;
-        });
-      }
-
-      this.cleanOrphanedAssignments();
     } finally {
       this.isSyncingDepartmentDuties = false;
     }
+  }
+
+  public syncAllDepartmentDutiesAndAssignments(): void {
+    this.syncDutyAssignmentsToAllModules();
+    this.deduplicateDutyAssignments();
+    this.cleanOrphanedAssignments();
   }
 
   /**
@@ -6890,6 +7282,10 @@ class DataStore {
     this.syncAllAssignmentsWithQuotas();
     this.syncAllDepartmentDutiesAndAssignments();
     this.saveToStorage();
+    try {
+      firestoreRepository.setDocData(this.currentSchoolId, 'duties', id, this.duties[index]).catch(() => {});
+    } catch {}
+    this.notify();
     return true;
   }
 
@@ -6901,6 +7297,10 @@ class DataStore {
     this.duties.push(newDuty);
     this.syncAllAssignmentsWithQuotas();
     this.saveToStorage();
+    try {
+      firestoreRepository.setDocData(this.currentSchoolId, 'duties', newDuty.id, newDuty).catch(() => {});
+    } catch {}
+    this.notify();
     return newDuty;
   }
 
@@ -6917,6 +7317,10 @@ class DataStore {
     });
     this.syncAllAssignmentsWithQuotas();
     this.saveToStorage();
+    try {
+      firestoreRepository.batchSetDocuments(this.currentSchoolId, 'duties', created).catch(() => {});
+    } catch {}
+    this.notify();
     return created;
   }
 
@@ -6938,6 +7342,10 @@ class DataStore {
     }
     this.syncAllDepartmentDutiesAndAssignments();
     this.saveToStorage();
+    try {
+      firestoreRepository.deleteDocData(this.currentSchoolId, 'duties', id).catch(() => {});
+    } catch {}
+    this.notify();
     return true;
   }
 
@@ -6963,6 +7371,12 @@ class DataStore {
       }
       this.syncAllDepartmentDutiesAndAssignments();
       this.saveToStorage();
+      try {
+        dutyIds.forEach((dId) => {
+          firestoreRepository.deleteDocData(this.currentSchoolId, 'duties', dId).catch(() => {});
+        });
+      } catch {}
+      this.notify();
     }
     return count;
   }
@@ -6975,7 +7389,14 @@ class DataStore {
     const count = beforeLen - this.assignments.length;
     if (count > 0) {
       for (const item of deletedItems) {
-        if (item.type === 'CONCURRENT') {
+        const isDuty =
+          item.type === 'CONCURRENT' ||
+          item.type === 'EXEMPTION' ||
+          item.type === 'CONCURRENT_DUTY' ||
+          Boolean(item.dutyId) ||
+          Boolean(item.dutyName);
+
+        if (isDuty) {
           const isHead = this.isHeadDepartmentDuty(item.dutyId, item.dutyName);
           const isDep = this.isDeputyDepartmentDuty(item.dutyId, item.dutyName);
           if (isHead) {
@@ -6986,6 +7407,7 @@ class DataStore {
               const dept = this.departments.find((d) => d.id === item.departmentId || d.headTeacherId === item.teacherId);
               if (dept && dept.headTeacherId === item.teacherId) {
                 dept.headTeacherId = undefined;
+                firestoreRepository.setDocData(this.currentSchoolId, 'departments', dept.id, dept).catch(() => {});
               }
             }
           }
@@ -7002,34 +7424,477 @@ class DataStore {
                   dept.deputyTeacherIds = dept.deputyTeacherIds.filter((tId) => tId !== item.teacherId);
                 }
                 dept.deputyTeacherId = dept.deputyTeacherIds?.[0] || undefined;
+                firestoreRepository.setDocData(this.currentSchoolId, 'departments', dept.id, dept).catch(() => {});
               }
             }
           }
 
-          // Đồng bộ gỡ bỏ nhiệm vụ khỏi teacher.positions nếu giáo viên không còn phân công này
+          // Xử lý GVCN nếu là chủ nhiệm lớp
+          if (item.classId || (item.dutyName && item.dutyName.toLowerCase().includes('chủ nhiệm'))) {
+            const cls = this.classes.find(
+              (c) => c.id === item.classId || (item.dutyName && item.dutyName.includes(c.name))
+            );
+            if (cls && cls.homeroomTeacherId === item.teacherId) {
+              cls.homeroomTeacherId = undefined;
+              firestoreRepository.setDocData(this.currentSchoolId, 'classes', cls.id, cls).catch(() => {});
+            }
+          }
+
+          // Đồng bộ gỡ bỏ nhiệm vụ khỏi teacher.positions triệt để (xóa cả dạng có định mức trong ngoặc)
           const teacher = this.teachers.find((t) => t.id === item.teacherId);
           if (teacher && Array.isArray(teacher.positions)) {
-            const rawClean = (item.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim();
+            const rawClean = (item.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
             const normClean = normalizePositionName(rawClean).toLowerCase();
+            const dId = (item.dutyId || '').trim().toLowerCase();
+
             const hasOtherSameDuty = this.assignments.some(
               (a) =>
                 !a.isDeleted &&
                 a.teacherId === item.teacherId &&
-                a.type === 'CONCURRENT' &&
+                (a.type === 'CONCURRENT' || a.type === 'EXEMPTION' || a.type === 'CONCURRENT_DUTY' || Boolean(a.dutyId)) &&
                 normalizePositionName((a.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase() === normClean
             );
             if (!hasOtherSameDuty) {
-              teacher.positions = teacher.positions.filter(
-                (p) => normalizePositionName(p).toLowerCase() !== normClean
-              );
+              teacher.positions = teacher.positions.filter((p) => {
+                const cleanP = p.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+                const normP = normalizePositionName(cleanP).toLowerCase();
+                if (normClean && (normP === normClean || cleanP === normClean || cleanP === rawClean)) {
+                  return false;
+                }
+                if (rawClean && (cleanP.includes(rawClean) || rawClean.includes(cleanP))) {
+                  return false;
+                }
+                const slug = cleanP.replace(/[^a-z0-9_-]+/g, '_');
+                if (dId && (dId.includes(slug) || slug.includes(dId.replace('duty_custom_', '')))) {
+                  return false;
+                }
+                return true;
+              });
+              firestoreRepository.setDocData(this.currentSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
             }
           }
+
+          // Xóa đồng bộ trên Cloud Firestore
+          const safeDocId = (item.id || '').replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+          firestoreRepository.deleteDocData(this.currentSchoolId, 'assignments', safeDocId).catch(() => {});
         }
       }
       this.syncAllDepartmentDutiesAndAssignments();
-      this.saveToStorage();
+      this.saveToStorage(true);
+      this.setHasUnsavedChanges(true);
+
+      const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(this.getScopedKey(STORAGE_KEYS.TEACHERS, targetSchoolId), JSON.stringify(this.teachers));
+          localStorage.setItem(this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, targetSchoolId), JSON.stringify(this.assignments));
+          localStorage.setItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, targetSchoolId), JSON.stringify(this.departments));
+          localStorage.setItem(this.getScopedKey(STORAGE_KEYS.CLASSES, targetSchoolId), JSON.stringify(this.classes));
+        } catch {}
+      }
     }
     return count;
+  }
+
+  public bulkClearDutiesForTeachers(teacherIds?: string[]): number {
+    const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+    const isAll = !teacherIds || teacherIds.length === 0 || teacherIds.includes('ALL');
+    const targetTeacherList = isAll ? this.teachers : this.teachers.filter((t) => teacherIds.includes(t.id));
+    const tSet = new Set(targetTeacherList.map((t) => t.id));
+
+    // 1. Tìm tất cả phân công kiêm nhiệm / miễn giảm của các giáo viên này trên MỌI phiên bản
+    const targetDutyAssignments = this.assignments.filter(
+      (a) =>
+        (isAll || tSet.has(a.teacherId)) &&
+        !a.isDeleted &&
+        (!a.type ||
+          a.type === 'CONCURRENT' ||
+          a.type === 'EXEMPTION' ||
+          a.type === 'CONCURRENT_DUTY' ||
+          Boolean(a.dutyId) ||
+          Boolean(a.dutyName) ||
+          a.session === 'ACTIVITY' ||
+          (a.classId && this.classes.some((c) => c.id === a.classId && c.homeroomTeacherId === a.teacherId)))
+    );
+
+    const asgIds = new Set(targetDutyAssignments.map((a) => a.id));
+
+    // 2. Xóa khỏi this.assignments
+    this.assignments = this.assignments.filter((a) => !asgIds.has(a.id));
+
+    // 3. Xóa các phân công này trên Cloud Firestore
+    targetDutyAssignments.forEach((a) => {
+      const safeDocId = (a.id || '').replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+      firestoreRepository.deleteDocData(targetSchoolId, 'assignments', safeDocId).catch(() => {});
+    });
+
+    // 4. Xóa sạch positions của các giáo viên này và cập nhật trên Firestore
+    for (const teacher of targetTeacherList) {
+      teacher.positions = [];
+      if (teacher.status === 'PRINCIPAL' || teacher.status === 'VICE_PRINCIPAL') {
+        teacher.status = 'ACTIVE';
+        teacher.statusLabel = 'Đang giảng dạy';
+        teacher.standardQuota = 19;
+      }
+      firestoreRepository.setDocData(targetSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
+    }
+
+    // 5. Thu hồi vai trò Tổ trưởng / Tổ phó trong Departments và lưu lên Firestore
+    this.departments.forEach((dept) => {
+      let deptChanged = false;
+      if (dept.headTeacherId && (isAll || tSet.has(dept.headTeacherId))) {
+        dept.headTeacherId = undefined;
+        deptChanged = true;
+      }
+      if (dept.deputyTeacherId && (isAll || tSet.has(dept.deputyTeacherId))) {
+        dept.deputyTeacherId = undefined;
+        deptChanged = true;
+      }
+      if (Array.isArray(dept.deputyTeacherIds)) {
+        const prevLen = dept.deputyTeacherIds.length;
+        dept.deputyTeacherIds = isAll ? [] : dept.deputyTeacherIds.filter((id) => !tSet.has(id));
+        if (dept.deputyTeacherIds.length !== prevLen) {
+          dept.deputyTeacherId = dept.deputyTeacherIds[0] || undefined;
+          deptChanged = true;
+        }
+      }
+      if (deptChanged) {
+        firestoreRepository.setDocData(targetSchoolId, 'departments', dept.id, dept).catch(() => {});
+      }
+    });
+
+    // 6. Thu hồi vai trò Chủ nhiệm trong Classes và lưu lên Firestore
+    this.classes.forEach((cls) => {
+      if (cls.homeroomTeacherId && (isAll || tSet.has(cls.homeroomTeacherId))) {
+        cls.homeroomTeacherId = undefined;
+        firestoreRepository.setDocData(targetSchoolId, 'classes', cls.id, cls).catch(() => {});
+      }
+    });
+
+    // 7. Ghi nhận nhật ký kiểm toán
+    this.logAction({
+      action: 'UPDATE',
+      entityType: 'TEACHER',
+      entityId: isAll ? 'ALL' : (teacherIds || []).join(','),
+      entityDescription: `Xóa toàn bộ kiêm nhiệm của ${targetTeacherList.length} giáo viên (${targetDutyAssignments.length} phân công)`,
+    });
+
+    // 8. Đồng bộ và lưu ngay lập tức vào scoped localStorage
+    this.syncAllDepartmentDutiesAndAssignments();
+    this.saveToStorage(true);
+    this.setHasUnsavedChanges(true);
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.TEACHERS, targetSchoolId), JSON.stringify(this.teachers));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, targetSchoolId), JSON.stringify(this.assignments));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, targetSchoolId), JSON.stringify(this.departments));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.CLASSES, targetSchoolId), JSON.stringify(this.classes));
+      } catch {}
+    }
+
+    this.notify();
+    return targetDutyAssignments.length;
+  }
+
+  /**
+   * LỆNH XÓA SẠCH DỮ LIỆU VẬN HÀNH (GIÁO VIÊN, LỚP, PHÂN CÔNG, KIÊM NHIỆM) TRÊN CẢ LOCAL VÀ CLOUD
+   * Sau khi xóa, mở phần mềm chỉ có sẵn:
+   * - Danh mục kiêm nhiệm chuẩn (SpecialDuty)
+   * - Danh mục môn học chuẩn (Subject)
+   * - Khung phân phối tiết mặc định (Curriculum)
+   * - Danh mục viết tắt (AbbreviationRule)
+   * - Cơ cấu tổ chuyên môn và điểm trường sạch sẽ
+   */
+  public clearAllOperationalData(
+    schoolId: string = this.currentSchoolId,
+    clearCloud: boolean = true
+  ): { success: boolean; message: string } {
+    const sId = schoolId || this.currentSchoolId || 'school_quyhop';
+
+    // 1. Làm sạch bộ nhớ
+    this.teachers = [];
+    this.classes = [];
+    this.assignments = [];
+
+    // Làm sạch chức vụ trong tổ chuyên môn
+    this.departments.forEach((d) => {
+      d.teacherIds = [];
+      d.headTeacherId = undefined;
+      d.deputyTeacherId = undefined;
+      d.deputyTeacherIds = [];
+    });
+
+    // 2. Lưu trạng thái trắng vào scoped localStorage
+    const scopedTeachersKey = this.getScopedKey(STORAGE_KEYS.TEACHERS, sId);
+    const scopedClassesKey = this.getScopedKey(STORAGE_KEYS.CLASSES, sId);
+    const scopedAssignmentsKey = this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, sId);
+    const scopedDeptsKey = this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, sId);
+
+    this.setItem(scopedTeachersKey, []);
+    this.setItem(scopedClassesKey, []);
+    this.setItem(scopedAssignmentsKey, []);
+    this.setItem(scopedDeptsKey, this.departments);
+
+    if (sId === 'school_quyhop') {
+      this.setItem(STORAGE_KEYS.TEACHERS, []);
+      this.setItem(STORAGE_KEYS.CLASSES, []);
+      this.setItem(STORAGE_KEYS.ASSIGNMENTS, []);
+      this.setItem(STORAGE_KEYS.DEPARTMENTS, this.departments);
+    }
+
+    // Đánh dấu cờ dữ liệu đã xóa để không bao giờ tự động nạp lại demo
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(`pccm_data_cleared_${sId}`, 'true');
+        localStorage.setItem('pccm_clean_slate_active', 'true');
+      } catch {}
+    }
+
+    // 3. Xóa trên Cloud Firestore
+    if (clearCloud) {
+      firestoreRepository.clearSubCollection(sId, 'teachers').catch(() => {});
+      firestoreRepository.clearSubCollection(sId, 'classes').catch(() => {});
+      firestoreRepository.clearSubCollection(sId, 'assignments').catch(() => {});
+      this.departments.forEach((d) => {
+        firestoreRepository.setDocData(sId, 'departments', d.id, d).catch(() => {});
+      });
+    }
+
+    this.saveLocalCacheOnly();
+    this.notify();
+
+    return {
+      success: true,
+      message: 'Đã xóa sạch toàn bộ dữ liệu Giáo viên, Lớp học và Phân công (cả kiêm nhiệm) trên máy và đám mây! Hệ thống đã về trạng thái ban đầu sạch sẽ, sẵn sàng sử dụng.',
+    };
+  }
+
+  /**
+   * ĐẨY CẤU TRÚC HỆ THỐNG LÊN CLOUD (Dành cho Quản trị viên tối cao)
+   * Chỉ đồng bộ danh mục chuẩn (môn học, khung tiết, danh mục kiêm nhiệm, danh mục viết tắt)
+   * KHÔNG đụng đến dữ liệu giáo viên, lớp, phân công của bất kỳ trường nào!
+   */
+  public async publishSystemSchemaToCloud(): Promise<{ success: boolean; message: string }> {
+    try {
+      const catalog = {
+        schemaVersion: `v2026.10.24_${Date.now()}`,
+        subjects: this.subjects,
+        curriculum: this.curriculum,
+        duties: this.duties,
+        abbreviationRules: this.abbreviationRules,
+        publishedAt: new Date().toISOString(),
+        publishedBy: this.currentUser?.email || 'super_admin',
+        notes: 'Cấu trúc hệ thống chuẩn: Môn học, Khung tiết GDPT 2018, Danh mục kiêm nhiệm và Quy tắc viết tắt',
+      };
+      await firestoreRepository.saveSystemCatalogTemplate(catalog);
+      return {
+        success: true,
+        message: 'Đã đẩy Phiên bản Cấu trúc Hệ thống mới nhất lên Cloud thành công! Các trường được cấp quyền có thể bấm "Cập nhật hệ thống" để tải về.',
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || 'Lỗi khi đẩy cấu trúc hệ thống lên Cloud',
+      };
+    }
+  }
+
+  /**
+   * CẬP NHẬT HỆ THỐNG / PHIÊN BẢN MỚI (Dành cho trường được cấp quyền & tất cả các trường)
+   * Tải về các thay đổi cấu trúc mới nhất (môn học mới, khung số tiết chuẩn, chức danh kiêm nhiệm, viết tắt)
+   * TUYỆT ĐỐI KHÔNG GHI ĐÈ dữ liệu giáo viên, lớp học và phân công cá nhân của trường!
+   */
+  public async pullSystemSchemaFromCloud(): Promise<{ success: boolean; message: string; updatedItemsCount: number }> {
+    let updatedCount = 0;
+    try {
+      const template = await firestoreRepository.getSystemCatalogTemplate();
+      const targetSubjects = template?.subjects && template.subjects.length > 0 ? template.subjects : INITIAL_SUBJECTS;
+      const targetCurriculum = template?.curriculum && template.curriculum.length > 0 ? template.curriculum : INITIAL_CURRICULUM;
+      const targetDuties = template?.duties && template.duties.length > 0 ? template.duties : INITIAL_DUTIES;
+      const targetAbbr = template?.abbreviationRules && template.abbreviationRules.length > 0 ? template.abbreviationRules : INITIAL_ABBREVIATION_RULES;
+
+      // 1. Cập nhật / Bổ sung môn học mới mà trường chưa có
+      const existingCodes = new Set(this.subjects.map((s) => this.canonicalSubjectCode(s.code || '')));
+      const existingIds = new Set(this.subjects.map((s) => s.id));
+      for (const sub of targetSubjects) {
+        const canCode = this.canonicalSubjectCode(sub.code || '');
+        if (!existingCodes.has(canCode) && !existingIds.has(sub.id)) {
+          this.subjects.push({ ...sub });
+          existingCodes.add(canCode);
+          existingIds.add(sub.id);
+          updatedCount++;
+        }
+      }
+      this.subjects = this.deduplicateSubjectsList(this.subjects);
+
+      // 2. Cập nhật / Bổ sung khung tiết chuẩn cho các môn chưa có
+      for (const curr of targetCurriculum) {
+        const hasCurr = this.curriculum.some(
+          (c) => c.grade === curr.grade && c.subjectId === curr.subjectId && c.semesterId === curr.semesterId
+        );
+        if (!hasCurr) {
+          this.curriculum.push({ ...curr });
+          updatedCount++;
+        }
+      }
+
+      // 3. Cập nhật / Bổ sung danh mục chức danh kiêm nhiệm chuẩn
+      const existingDutyCodes = new Set(this.duties.map((d) => d.code));
+      for (const duty of targetDuties) {
+        if (!existingDutyCodes.has(duty.code)) {
+          this.duties.push({ ...duty });
+          existingDutyCodes.add(duty.code);
+          updatedCount++;
+        }
+      }
+
+      // 4. Bổ sung các quy tắc viết tắt mới
+      const existingAbbrKeywords = new Set(this.abbreviationRules.map((a) => a.originalText.toLowerCase()));
+      for (const rule of targetAbbr) {
+        if (!existingAbbrKeywords.has(rule.originalText.toLowerCase())) {
+          this.abbreviationRules.push({ ...rule });
+          existingAbbrKeywords.add(rule.originalText.toLowerCase());
+          updatedCount++;
+        }
+      }
+
+      // 5. Lưu lại cho trường hiện tại
+      this.saveToStorage(true);
+      this.notify();
+
+      return {
+        success: true,
+        updatedItemsCount: updatedCount,
+        message: `Đã cập nhật cấu trúc hệ thống thành công (${updatedCount} danh mục mới được bổ sung)! Toàn bộ dữ liệu Giáo viên, Lớp học và Phân công của trường được bảo lưu trọn vẹn 100%.`,
+      };
+    } catch (err: any) {
+      // Fallback: update from code standard
+      this.upgradeTenantStandardCatalog(this.currentSchoolId);
+      this.saveToStorage(true);
+      this.notify();
+      return {
+        success: true,
+        updatedItemsCount: 1,
+        message: 'Đã nâng cấp cấu trúc môn học và danh mục chuẩn từ phiên bản mã nguồn mới nhất! Dữ liệu của trường an toàn 100%.',
+      };
+    }
+  }
+
+  /**
+   * HỦY GÁN NHIỆM VỤ KIÊM NHIỆM CHO GIÁO VIÊN (TỪ GỐC KIÊM NHIỆM).
+   * Xóa triệt để TẤT CẢ các bản ghi phân công của nhiệm vụ này đối với giáo viên (bao gồm cả các bản sao trùng lặp),
+   * đồng thời tự động đồng bộ gỡ bỏ khỏi teacher.positions, departments và classes cả trên Firestore và Storage.
+   */
+  public unassignDutyFromTeacher(
+    dutyIdOrCodeOrName: string,
+    teacherId: string,
+    versionId?: string
+  ): number {
+    if (!dutyIdOrCodeOrName || !teacherId) return 0;
+
+    const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+    const targetVerId = versionId || this.currentVersionId || this.versions[0]?.id;
+    const targetClean = dutyIdOrCodeOrName.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+    const targetNorm = normalizePositionName(targetClean).toLowerCase();
+
+    const isHead = this.isHeadDepartmentDuty(dutyIdOrCodeOrName, dutyIdOrCodeOrName);
+    const isDep = this.isDeputyDepartmentDuty(dutyIdOrCodeOrName, dutyIdOrCodeOrName);
+
+    const matchesDuty = (a: TeachingAssignment) => {
+      if (a.teacherId !== teacherId) return false;
+      if (versionId && a.versionId && a.versionId !== targetVerId) return false;
+      if (isHead && this.isHeadDepartmentDuty(a.dutyId, a.dutyName)) return true;
+      if (isDep && this.isDeputyDepartmentDuty(a.dutyId, a.dutyName)) return true;
+      if (a.dutyId && (a.dutyId.toLowerCase() === targetClean || a.dutyId.toLowerCase() === targetNorm)) return true;
+      const aClean = (a.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+      const aNorm = normalizePositionName(aClean).toLowerCase();
+      if (aNorm && (aNorm === targetNorm || aClean === targetClean)) return true;
+      if (targetClean && (aClean.includes(targetClean) || targetClean.includes(aClean))) return true;
+      return false;
+    };
+
+    const toDelete = this.assignments.filter(matchesDuty);
+    const count = toDelete.length;
+
+    const toDeleteIds = new Set(toDelete.map((a) => a.id));
+    this.assignments = this.assignments.filter((a) => !toDeleteIds.has(a.id));
+
+    // Xóa trên Cloud Firestore
+    for (const a of toDelete) {
+      const safeDocId = (a.id || '').replace(/[\/\\]+/g, '_').replace(/[:\s]+/g, '_');
+      firestoreRepository.deleteDocData(targetSchoolId, 'assignments', safeDocId).catch(() => {});
+    }
+
+    // Xóa vị trí trong teacher.positions
+    const teacher = this.teachers.find((t) => t.id === teacherId);
+    if (teacher && Array.isArray(teacher.positions)) {
+      teacher.positions = teacher.positions.filter((p) => {
+        const cleanP = p.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+        const normP = normalizePositionName(cleanP).toLowerCase();
+        if (normP === targetNorm || cleanP === targetClean || cleanP.includes(targetClean) || targetClean.includes(cleanP)) {
+          return false;
+        }
+        return true;
+      });
+      firestoreRepository.setDocData(targetSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
+    }
+
+    // Nếu là Tổ trưởng / Tổ phó, dọn sạch trong departments
+    if (isHead) {
+      this.departments.forEach((dept) => {
+        if (dept.headTeacherId === teacherId) {
+          dept.headTeacherId = undefined;
+          firestoreRepository.setDocData(targetSchoolId, 'departments', dept.id, dept).catch(() => {});
+        }
+      });
+    }
+    if (isDep) {
+      this.departments.forEach((dept) => {
+        if (dept.deputyTeacherId === teacherId || (Array.isArray(dept.deputyTeacherIds) && dept.deputyTeacherIds.includes(teacherId))) {
+          dept.deputyTeacherIds = (dept.deputyTeacherIds || []).filter((id) => id !== teacherId);
+          dept.deputyTeacherId = dept.deputyTeacherIds[0] || undefined;
+          firestoreRepository.setDocData(targetSchoolId, 'departments', dept.id, dept).catch(() => {});
+        }
+      });
+    }
+
+    // Nếu là Chủ nhiệm lớp, dọn sạch trong classes
+    if (targetClean.includes('chủ nhiệm') || targetClean === 'chu_nhiem' || dutyIdOrCodeOrName.toLowerCase().includes('chủ nhiệm')) {
+      this.classes.forEach((cls) => {
+        if (cls.homeroomTeacherId === teacherId) {
+          if (targetClean.includes(cls.name.toLowerCase()) || targetClean.includes('chủ nhiệm')) {
+            cls.homeroomTeacherId = undefined;
+            firestoreRepository.setDocData(targetSchoolId, 'classes', cls.id, cls).catch(() => {});
+          }
+        }
+      });
+    }
+
+    // Đồng bộ lại tất cả modules từ gốc Kiêm nhiệm
+    this.syncDutyAssignmentsToAllModules(targetSchoolId, targetVerId);
+
+    this.logAction({
+      action: 'DELETE',
+      entityType: 'ASSIGNMENT',
+      entityId: Array.from(toDeleteIds).join(',') || `duty_${dutyIdOrCodeOrName}_${teacherId}`,
+      entityDescription: `Hủy gán nhiệm vụ kiêm nhiệm "${dutyIdOrCodeOrName}" của giáo viên ${teacher?.fullName || teacherId}`,
+    });
+
+    this.saveToStorage(true);
+    this.setHasUnsavedChanges(true);
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.TEACHERS, targetSchoolId), JSON.stringify(this.teachers));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, targetSchoolId), JSON.stringify(this.assignments));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, targetSchoolId), JSON.stringify(this.departments));
+        localStorage.setItem(this.getScopedKey(STORAGE_KEYS.CLASSES, targetSchoolId), JSON.stringify(this.classes));
+      } catch {}
+    }
+
+    this.notify();
+    return count > 0 ? count : 1;
   }
 
   public bulkAssignDutiesToTeachers(
@@ -7044,42 +7909,92 @@ class DataStore {
     notes?: string
   ): number {
     const weeks = semesterId === 'HK1' ? 18 : 17;
-    const assignmentsToAdd: Omit<TeachingAssignment, 'id' | 'createdAt' | 'createdBy'>[] = [];
-
     const cleanDutyName = dutyName.replace(/\s*\([^)]*\)/g, '').trim();
     const canonicalPos = normalizePositionName(cleanDutyName);
+    const normCanonical = canonicalPos.toLowerCase();
+
+    // Tìm duty định nghĩa chuẩn để lấy id và tên chuẩn
+    const matchedDuty = this.duties.find(
+      (d) =>
+        d.id === dutyId ||
+        d.code === dutyId ||
+        normalizePositionName(d.name).toLowerCase() === normCanonical ||
+        d.name.toLowerCase() === cleanDutyName.toLowerCase()
+    );
+    const finalDutyId = matchedDuty?.id || dutyId;
+    const finalDutyName = matchedDuty?.name || cleanDutyName;
+
+    let assignedOrUpdatedCount = 0;
+    const assignmentsToAdd: Omit<TeachingAssignment, 'id' | 'createdAt' | 'createdBy'>[] = [];
 
     teacherIds.forEach((tId) => {
       const teacher = this.teachers.find((t) => t.id === tId);
       if (teacher) {
         if (!Array.isArray(teacher.positions)) teacher.positions = [];
-        if (!teacher.positions.some((p) => normalizePositionName(p).toLowerCase() === canonicalPos.toLowerCase())) {
-          teacher.positions.push(canonicalPos);
-        }
+        // Xóa mọi biến thể cũ của cùng nhiệm vụ này trong teacher.positions để tránh lặp
+        teacher.positions = teacher.positions.filter((p) => {
+          const pNorm = normalizePositionName(p.replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase();
+          return pNorm !== normCanonical && !pNorm.includes(normCanonical) && !normCanonical.includes(pNorm);
+        });
+        const formattedPos = periods > 0 ? `${canonicalPos} (${periods} tiết/tuần)` : canonicalPos;
+        teacher.positions.push(formattedPos);
+        firestoreRepository.setDocData(this.currentSchoolId, 'teachers', teacher.id, teacher).catch(() => {});
       }
-      assignmentsToAdd.push({
-        schoolId: this.currentSchoolId,
-        schoolYearId,
-        semesterId,
-        versionId,
-        teacherId: tId,
-        departmentId: teacher?.departmentId || '',
-        type: type === 'EXEMPTION' ? 'EXEMPTION' : 'CONCURRENT',
-        dutyId,
-        dutyName,
-        session: 'ACTIVITY',
-        periodsPerWeek: periods,
-        weeks,
-        totalPeriods: periods * weeks,
-        status: 'approved',
-        notes: notes || `Gán kiêm nhiệm hàng loạt: ${dutyName}`,
+
+      // Kiểm tra xem giáo viên này ĐÃ CÓ phân công nhiệm vụ này trong versionId chưa
+      const existing = this.assignments.find((a) => {
+        if (a.isDeleted || a.versionId !== versionId || a.teacherId !== tId) return false;
+        if (a.dutyId && (a.dutyId === dutyId || a.dutyId === finalDutyId)) return true;
+        const aNorm = normalizePositionName((a.dutyName || '').replace(/\s*\([^)]*\)/g, '').trim()).toLowerCase();
+        if (aNorm && (aNorm === normCanonical || aNorm === normalizePositionName(finalDutyName).toLowerCase())) return true;
+        const aRaw = (a.dutyName || '').toLowerCase();
+        if (aRaw.includes(cleanDutyName.toLowerCase()) || cleanDutyName.toLowerCase().includes(aRaw)) return true;
+        return false;
       });
+
+      if (existing) {
+        // Cập nhật bản ghi hiện tại - TUYỆT ĐỐI KHÔNG TẠO DÒNG TRÙNG LẶP
+        existing.periodsPerWeek = periods;
+        existing.weeks = weeks;
+        existing.totalPeriods = periods * weeks;
+        existing.dutyId = finalDutyId;
+        existing.dutyName = finalDutyName;
+        existing.type = type === 'EXEMPTION' ? 'EXEMPTION' : 'CONCURRENT';
+        existing.session = 'ACTIVITY';
+        existing.status = 'approved';
+        existing.isDeleted = false;
+        if (notes) existing.notes = notes;
+        assignedOrUpdatedCount++;
+      } else {
+        assignmentsToAdd.push({
+          schoolId: this.currentSchoolId,
+          schoolYearId,
+          semesterId,
+          versionId,
+          teacherId: tId,
+          departmentId: teacher?.departmentId || '',
+          type: type === 'EXEMPTION' ? 'EXEMPTION' : 'CONCURRENT',
+          dutyId: finalDutyId,
+          dutyName: finalDutyName,
+          session: 'ACTIVITY',
+          periodsPerWeek: periods,
+          weeks,
+          totalPeriods: periods * weeks,
+          status: 'approved',
+          notes: notes || `Gán kiêm nhiệm: ${finalDutyName}`,
+        });
+      }
     });
 
-    this.addAssignments(assignmentsToAdd);
+    if (assignmentsToAdd.length > 0) {
+      this.addAssignments(assignmentsToAdd);
+      assignedOrUpdatedCount += assignmentsToAdd.length;
+    }
+
+    this.deduplicateDutyAssignments();
     this.syncAllDepartmentDutiesAndAssignments();
     this.saveToStorage();
-    return assignmentsToAdd.length;
+    return assignedOrUpdatedCount;
   }
 
   // FEEDBACK
@@ -7450,7 +8365,76 @@ class DataStore {
       entityId: 'abbr_rules_reset',
       entityDescription: 'Khôi phục danh mục từ viết tắt về mặc định',
     });
-    this.saveToStorage();
+  }
+
+  /**
+   * Chuẩn hóa mã môn học về mã chuẩn hệ thống (tránh xung đột LS_DL với LICH_SU_DIA_LI, KHTN, v.v.)
+   */
+  public canonicalSubjectCode(rawCode: string): string {
+    const c = (rawCode || '').trim().toUpperCase();
+    if (c === 'LS_DL' || c === 'SU_DIA' || c === 'LICH_SU_VA_DIA_LY' || c === 'LICH_SU_DIA_LY') return 'LICH_SU_DIA_LI';
+    if (c === 'KHOA_HOC_TU_NHIEN') return 'KHTN';
+    if (c === 'NGHE_THUAT_AN' || c === 'NHAC') return 'AM_NHAC';
+    if (c === 'NGHE_THUAT_MT' || c === 'MI_THUAT' || c === 'VE') return 'MY_THUAT';
+    if (c === 'HDTN' || c === 'HDTN_HN' || c === 'HOAT_DONG_TRAI_NGHIEM') return 'HDKT_HN';
+    if (c === 'GDDP') return 'NOI_DUNG_GDDP';
+    return c;
+  }
+
+  /**
+   * Khử trùng lặp danh mục môn học: Đảm bảo mỗi môn học có ID duy nhất, mã môn duy nhất,
+   * loại bỏ triệt để tình trạng hai phần tử con có cùng key (ví dụ: sub_ls_dl).
+   */
+  public deduplicateSubjectsList(subjectsList: Subject[]): Subject[] {
+    if (!Array.isArray(subjectsList) || subjectsList.length === 0) return [];
+
+    const seenIds = new Set<string>();
+    const seenCodes = new Set<string>();
+    const seenNames = new Set<string>();
+    const uniqueList: Subject[] = [];
+
+    for (const sub of subjectsList) {
+      if (!sub) continue;
+      const id = String(sub.id || '').trim();
+      if (!id) continue;
+      const canCode = this.canonicalSubjectCode(sub.code || '');
+      const normName = String(sub.name || '').trim().toLowerCase();
+
+      // Kiểm tra trùng ID
+      if (seenIds.has(id)) {
+        continue;
+      }
+
+      // Kiểm tra trùng Mã môn chuẩn
+      if (canCode && seenCodes.has(canCode)) {
+        continue;
+      }
+
+      // Kiểm tra trùng tên đối với các môn tích hợp gốc (Lịch sử và Địa lí, Khoa học tự nhiên)
+      if (normName === 'lịch sử và địa lí' || normName === 'khoa học tự nhiên') {
+        if (seenNames.has(normName)) {
+          continue;
+        }
+      }
+
+      seenIds.add(id);
+      if (canCode) seenCodes.add(canCode);
+      if (normName) seenNames.add(normName);
+      uniqueList.push(sub);
+    }
+
+    return uniqueList;
+  }
+
+  public deduplicateSubjects(): number {
+    const beforeCount = this.subjects.length;
+    this.subjects = this.deduplicateSubjectsList(this.subjects);
+    const removedCount = beforeCount - this.subjects.length;
+    if (removedCount > 0) {
+      this.saveLocalCacheOnly();
+      this.notify();
+    }
+    return removedCount;
   }
 
   /**

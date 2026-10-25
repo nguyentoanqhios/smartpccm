@@ -34,6 +34,7 @@ import {
   UserPlus,
   Eye,
   BookOpen,
+  Layers,
 } from 'lucide-react';
 import { SchoolTenantLicense, LicensePlanType, UserProfile, SchoolClass, Teacher } from '../types';
 import { dataStore } from '../repositories/dataStore';
@@ -53,6 +54,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
   // Cloud Sync States
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [isCloudPulling, setIsCloudPulling] = useState(false);
+  const [isPublishingSchema, setIsPublishingSchema] = useState(false);
 
   // Quick Class modal states
   const [quickClassSchool, setQuickClassSchool] = useState<SchoolTenantLicense | null>(null);
@@ -83,18 +85,20 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
   const [handoverModalLicense, setHandoverModalLicense] = useState<SchoolTenantLicense | null>(null);
   const [deleteConfirmLicense, setDeleteConfirmLicense] = useState<SchoolTenantLicense | null>(null);
   const [isCloudflareGuideOpen, setIsCloudflareGuideOpen] = useState(false);
-  const [handoverDomainMode, setHandoverDomainMode] = useState<'CURRENT' | 'PREVIEW' | 'CUSTOM'>(() => {
+  const [handoverDomainMode, setHandoverDomainMode] = useState<'CURRENT' | 'CUSTOM' | 'PREVIEW'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('pccm_handover_domain_mode');
-      if (saved === 'CURRENT' || saved === 'PREVIEW' || saved === 'CUSTOM') return saved;
+      if (saved === 'CURRENT' || saved === 'CUSTOM') return saved;
+      // Không mặc định PREVIEW vì ais-pre trên Cloud Run sẽ báo 404 Not Found nếu chưa bấm Publish
+      localStorage.setItem('pccm_handover_domain_mode', 'CURRENT');
     }
     return 'CURRENT';
   });
   const [handoverCustomDomain, setHandoverCustomDomain] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('pccm_handover_custom_domain') || '';
+      return localStorage.getItem('pccm_handover_custom_domain') || 'https://smartpccm.vercel.app';
     }
-    return '';
+    return 'https://smartpccm.vercel.app';
   });
 
   const updateDomainMode = (mode: 'CURRENT' | 'PREVIEW' | 'CUSTOM') => {
@@ -226,15 +230,37 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     }
   };
 
+  const handlePublishSystemSchema = async () => {
+    if (!window.confirm('Bạn có chắc chắn muốn đẩy Cấu trúc hệ thống mẫu (Khung môn học, phân phối số tiết, danh mục kiêm nhiệm, quy tắc viết tắt) lên Cloud cho TẤT CẢ các trường được cấp quyền tải về?')) {
+      return;
+    }
+    setIsPublishingSchema(true);
+    try {
+      const res = await dataStore.publishSystemSchemaToCloud();
+      if (res.success) {
+        showToast(res.message, 'success');
+      } else {
+        showToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Lỗi khi phát hành cấu trúc lên Cloud', 'error');
+    } finally {
+      setIsPublishingSchema(false);
+    }
+  };
+
   const handlePushSchoolDataToCloud = async (lic: SchoolTenantLicense) => {
     try {
-      showToast(`Đang đẩy dữ liệu [${lic.schoolName}] lên Cloud Firestore...`, 'warning');
+      showToast(`Đang đồng bộ khung chuẩn & đẩy dữ liệu [${lic.schoolName}] lên Cloud...`, 'warning');
       await ensureFirebaseAuth();
       await firestoreRepository.saveSchoolLicense(lic);
-      if (dataStore.getSchoolId() === lic.id) {
-        await dataStore.syncCurrentDataToFirestore();
+      if (dataStore.getSchoolId() !== lic.id) {
+        dataStore.setSchoolId(lic.id);
       }
-      showToast(`Đã đẩy dữ liệu trường [${lic.schoolName}] lên Cloud Firestore thành công!`, 'success');
+      dataStore.upgradeTenantStandardCatalog(lic.id);
+      dataStore.deduplicateDutyAssignments();
+      await dataStore.syncCurrentDataToFirestore();
+      showToast(`Đã đồng bộ khung chuẩn & đẩy dữ liệu trường [${lic.schoolName}] lên Cloud Firestore thành công!`, 'success');
     } catch (err: any) {
       showToast(`Lỗi đẩy dữ liệu trường [${lic.schoolName}]: ${err?.message}`, 'error');
     }
@@ -340,8 +366,11 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       .replace(/^_|_$/g, '');
     let baseId = `school_${clean || 'moi'}`;
     const allLics = dataStore.getSchoolLicenses();
-    if (allLics.some((l) => l.id === baseId && l.id !== editingLicense?.id)) {
-      baseId = `${baseId}_${Math.random().toString(36).substring(2, 6)}`;
+    const deletedSchoolIds: string[] = typeof window !== 'undefined'
+      ? JSON.parse(localStorage.getItem('pccm_deleted_school_ids') || '[]')
+      : [];
+    if (allLics.some((l) => l.id === baseId && l.id !== editingLicense?.id) || deletedSchoolIds.includes(baseId)) {
+      baseId = `${baseId}_${Date.now().toString(36).slice(-4)}`;
     }
     return baseId;
   };
@@ -404,7 +433,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       schoolName: formSchoolName.trim(),
       adminEmail: formAdminEmail.trim().toLowerCase(),
       adminName: formAdminName.trim() || undefined,
-      assignedPasswordHint: formPasswordHint.trim() || '123456789',
+      assignedPasswordHint: formPasswordHint.trim() || generateRandomPassword(),
       status: editingLicense ? editingLicense.status : 'active',
       planType: formPlanType,
       expiresAt: formExpiryDate ? new Date(`${formExpiryDate}T23:59:59.000Z`).toISOString() : null,
@@ -415,6 +444,19 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       createdAt: editingLicense ? editingLicense.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    if (!editingLicense) {
+      // 1. Dọn dẹp dữ liệu cũ tránh bị vướng cache hay cloud
+      dataStore.clearAllOperationalData(sId, true);
+      // 2. Thiết lập thông tin trường mới chính xác ngay từ đầu
+      dataStore.setSchoolInfoForSchool(sId, {
+        schoolName: formSchoolName.trim(),
+        email: formAdminEmail.trim().toLowerCase(),
+        phone: formPhone.trim() || '',
+        principalName: formAdminName.trim() || '',
+        schoolYear: '2026-2027',
+      });
+    }
 
     await dataStore.saveSchoolLicense(newLicense);
     setLicenses([...dataStore.getSchoolLicenses()]);
@@ -488,7 +530,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     
     const mode = modeOverride || handoverDomainMode;
     // Mặc định luôn sử dụng URL đang chạy thực tế trên trình duyệt để 100% người nhận mở được ngay, không bị lỗi 404
-    let baseOrigin = 'https://ais-dev-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
+    let baseOrigin = '';
     if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
       baseOrigin = window.location.origin;
     }
@@ -496,8 +538,8 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     const sName = licenseObj?.schoolName;
     const sEmail = licenseObj?.adminEmail;
 
-    if (mode === 'PREVIEW') {
-      baseOrigin = 'https://ais-pre-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
+    if (mode === 'PREVIEW' && baseOrigin) {
+      baseOrigin = baseOrigin.replace('ais-dev-', 'ais-pre-');
     } else if (mode === 'CUSTOM' && handoverCustomDomain.trim()) {
       let custom = handoverCustomDomain.trim();
       if (!custom.startsWith('http://') && !custom.startsWith('https://')) {
@@ -515,12 +557,15 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
         return custom.replace(/^https?:\/\/pccm-[a-z0-9_-]+/i, `https://pccm-${sSlug || 'main'}`);
       }
 
-      // 3. Nếu là domain gốc: truyền đầy đủ tham số để bất kỳ máy nào mở cũng nhận diện đúng tên trường
+      // 3. Nếu là domain gốc: truyền đầy đủ tham số để bất kỳ máy nào mở cũng nhận diện đúng tên trường & mật khẩu
       if (sId) {
         const params = new URLSearchParams();
         params.set('schoolId', sId);
         if (sName && sName !== 'TRƯỜNG THCS MỚI') params.set('schoolName', sName);
         if (sEmail) params.set('adminEmail', sEmail);
+        if (licenseObj?.assignedPasswordHint) {
+          params.set('pass', licenseObj.assignedPasswordHint);
+        }
         return `${custom}/?${params.toString()}`;
       }
       return custom;
@@ -530,7 +575,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     const fullBase = `${baseOrigin}${cleanPath}`;
 
     if (sId) {
-      // Truyền tham số schoolId và schoolName rõ ràng để thiết bị đối tác luôn nhận diện 100% tên trường chính xác
+      // Truyền tham số schoolId, schoolName và pass rõ ràng để thiết bị đối tác luôn nhận diện 100% chính xác
       const params = new URLSearchParams();
       params.set('schoolId', sId);
       if (sName && sName !== 'TRƯỜNG THCS MỚI') {
@@ -538,6 +583,9 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       }
       if (sEmail) {
         params.set('adminEmail', sEmail);
+      }
+      if (licenseObj?.assignedPasswordHint) {
+        params.set('pass', licenseObj.assignedPasswordHint);
       }
       return `${baseOrigin}/?${params.toString()}`;
     }
@@ -664,14 +712,27 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            id="btn-push-all-school-configs-cloud"
             type="button"
             onClick={handlePushAllToCloud}
             disabled={isCloudSyncing}
-            className="flex items-center gap-1.5 bg-blue-700/80 hover:bg-blue-600 text-white border border-blue-400/40 px-3.5 py-2.5 rounded-xl text-xs font-bold shadow-md transition cursor-pointer disabled:opacity-50"
-            title="Đẩy toàn bộ danh sách bản quyền các trường học lên Cloud Firestore"
+            className="flex items-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white border-2 border-emerald-300/80 px-4 py-2.5 rounded-xl text-xs font-black shadow-lg transition cursor-pointer disabled:opacity-50 hover:scale-[1.02] active:scale-95"
+            title="Đẩy đồng bộ cấu hình bản quyền và thông tin đăng nhập của tất cả các trường lên Firebase Cloud (Vercel)"
           >
-            <UploadCloud className={`w-4 h-4 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
-            <span>{isCloudSyncing ? 'Đang đẩy Cloud...' : 'Đẩy lên Cloud'}</span>
+            <UploadCloud className={`w-4 h-4 text-amber-200 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
+            <span className="tracking-wide">{isCloudSyncing ? 'Đang đẩy cấu hình Cloud...' : 'ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG'}</span>
+          </button>
+
+          <button
+            id="btn-publish-system-schema-cloud"
+            type="button"
+            onClick={handlePublishSystemSchema}
+            disabled={isPublishingSchema}
+            className="flex items-center gap-2 bg-gradient-to-r from-indigo-700 to-blue-800 hover:from-indigo-600 hover:to-blue-700 text-white border-2 border-indigo-300/80 px-4 py-2.5 rounded-xl text-xs font-black shadow-lg transition cursor-pointer disabled:opacity-50 hover:scale-[1.02] active:scale-95"
+            title="Đẩy mẫu khung môn học, số tiết và danh mục chuẩn lên Cloud cho các trường tải về mà không ghi đè dữ liệu riêng"
+          >
+            <Layers className={`w-4 h-4 text-cyan-200 ${isPublishingSchema ? 'animate-bounce' : ''}`} />
+            <span className="tracking-wide">{isPublishingSchema ? 'Đang phát hành...' : 'ĐẨY CẤU TRÚC HỆ THỐNG'}</span>
           </button>
 
           <button
@@ -693,6 +754,29 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
             <Plus className="w-4 h-4" />
             <span>Cấp bản quyền trường mới</span>
           </button>
+        </div>
+      </div>
+
+      {/* THÔNG BÁO HỆ THỐNG VERCEL & CÁCH LY DỮ LIỆU */}
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 border border-blue-200 rounded-2xl p-4 text-xs text-slate-800 shadow-2xs space-y-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-black text-blue-950 text-xs sm:text-sm">
+            <ShieldCheck className="w-5 h-5 text-blue-700 shrink-0" />
+            <span>ĐỒNG BỘ PHIÊN BẢN ỨNG DỤNG & CẤU HÌNH BẢN QUYỀN (VERCEL + FIREBASE)</span>
+          </div>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 self-start sm:self-auto">
+            Dữ liệu từng trường cách ly 100%
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] text-slate-600 pt-1">
+          <div className="p-2.5 bg-white/80 rounded-xl border border-blue-100">
+            <strong className="text-blue-900 block mb-0.5">1. Đồng bộ code, tính năng & giao diện:</strong>
+            Khi triển khai lên Vercel, toàn bộ các trường đối tác tự động nhận phiên bản code mới nhất khi tải trang mà không cần can thiệp.
+          </div>
+          <div className="p-2.5 bg-white/80 rounded-xl border border-emerald-100">
+            <strong className="text-emerald-900 block mb-0.5">2. Đồng bộ cấu hình bản quyền:</strong>
+            Bấm nút <strong className="text-emerald-700">"ĐẨY ĐỒNG BỘ CẤU HÌNH CHO CÁC TRƯỜNG"</strong> ở trên để cập nhật danh sách trường, mật khẩu và hạn dùng lên Cloud. Dữ liệu giáo viên/lớp/phân công riêng của từng trường không bị ảnh hưởng.
+          </div>
         </div>
       </div>
 
@@ -1200,7 +1284,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                       const url = getPublicSharedUrl(lic);
                       navigator.clipboard.writeText(url);
                       if (url.includes('ais-dev-')) {
-                        showToast(`⚠️ Đã sao chép link. Lưu ý: Link ais-dev mở trên máy khác sẽ bị lỗi 403. Thầy hãy chọn 'Tự nhập Domain riêng' ở trên để gửi đối tác!`, 'warning');
+                        showToast(`Đã sao chép link trường ${lic.schoolName}! (Mở tab mới trên trình duyệt này để kiểm tra)`, 'success');
                       } else {
                         showToast(`Đã sao chép link truy cập của ${lic.schoolName}!`);
                       }
@@ -1208,9 +1292,20 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                     className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 font-bold text-xs px-3 py-1.5 rounded-xl transition cursor-pointer"
                     title="Sao chép link truy cập chuyên dụng cho trường này"
                   >
-                    <ExternalLink className="w-3.5 h-3.5 text-indigo-700" />
+                    <Copy className="w-3.5 h-3.5 text-indigo-700" />
                     <span>Sao chép Link</span>
                   </button>
+
+                  <a
+                    href={getPublicSharedUrl(lic, 'CURRENT')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs px-3 py-1.5 rounded-xl transition cursor-pointer"
+                    title="Mở trực tiếp link trường này trong tab mới để kiểm tra ngay (100% không bị 404)"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Mở kiểm tra</span>
+                  </a>
 
                   <button
                     type="button"
@@ -1830,21 +1925,25 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                     <span>Máy chủ phát hành liên kết:</span>
                   </span>
                   <span className="text-[10px] text-amber-800 font-medium">
-                    (Chọn URL phù hợp để người nhận mở không bị lỗi 404)
+                    (Mặc định là Link đang chạy để Thầy mở kiểm tra được ngay 100%)
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
                     type="button"
-                    onClick={() => updateDomainMode('PREVIEW')}
+                    onClick={() => {
+                      updateCustomDomain('https://smartpccm.vercel.app');
+                      updateDomainMode('CUSTOM');
+                    }}
                     className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
-                      handoverDomainMode === 'PREVIEW'
-                        ? 'bg-blue-900 text-white border-blue-900 shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      handoverDomainMode === 'CUSTOM' && handoverCustomDomain.includes('smartpccm.vercel.app')
+                        ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
+                        : 'bg-white text-blue-900 border-blue-300 hover:bg-blue-50'
                     }`}
-                    title="Link công khai chính thức gửi đối tác - không bao giờ bị lỗi 403"
+                    title="Dùng trực tiếp tên miền Vercel chính thức của Thầy: https://smartpccm.vercel.app để gửi trường khác"
                   >
-                    <span>🌐 Link Công khai chính thức (ais-pre)</span>
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>🌐 smartpccm.vercel.app (Vercel chính thức)</span>
                   </button>
                   <button
                     type="button"
@@ -1854,32 +1953,45 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                         ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
-                    title="Link đang chạy trong phiên làm việc của thầy"
+                    title="Link đang chạy trực tiếp - Thầy mở tab mới là vào được ngay 100% không bị 404"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Link Dev nội bộ (ais-dev)</span>
+                    <span>🔗 Link Dev Đang chạy (Kiểm tra nội bộ)</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => updateDomainMode('CUSTOM')}
                     className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
-                      handoverDomainMode === 'CUSTOM'
-                        ? 'bg-blue-900 text-white border-blue-900 shadow-xs'
+                      handoverDomainMode === 'CUSTOM' && !handoverCustomDomain.includes('smartpccm.vercel.app')
+                        ? 'bg-indigo-900 text-white border-indigo-900 shadow-xs'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
+                    title="Tên miền triển khai riêng khác (Cloudflare Pages / edu.vn)"
                   >
-                    <span>✏️ Tự nhập Domain riêng</span>
+                    <span>✏️ Nhập Domain khác</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateDomainMode('PREVIEW')}
+                    className={`text-xs px-2.5 py-1.5 rounded-lg font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                      handoverDomainMode === 'PREVIEW'
+                        ? 'bg-indigo-900 text-white border-indigo-900 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                    title="Chỉ dùng khi đã bấm nút Share/Deploy trên thanh AI Studio"
+                  >
+                    <span>☁️ AI Studio Preview (ais-pre)</span>
                   </button>
                 </div>
                 <div className="text-[11px] p-3 rounded-xl border space-y-1.5 bg-amber-50/90 border-amber-300 text-amber-950">
                   <p className="font-bold flex items-center gap-1.5 text-xs text-amber-900">
                     <Info className="w-4 h-4 text-amber-700" />
-                    <span>Giải thích vì sao mở trên máy khác bị lỗi 403 / 404:</span>
+                    <span>Nguyên nhân lỗi 404 & Cách gửi link cho trường khác dùng được ngay:</span>
                   </p>
                   <ul className="list-disc list-inside space-y-1 text-slate-700 leading-relaxed text-[11px]">
-                    <li><strong>Lỗi 403 (Forbidden):</strong> Link <code>ais-dev</code> là môi trường lập trình nội bộ của tài khoản thầy. Google chặn không cho máy khác/người khác mở nếu chưa đăng nhập đúng Gmail của thầy.</li>
-                    <li><strong>Lỗi 404 (Not Found):</strong> Link <code>ais-pre</code> là link dự kiến trên Cloud Run nhưng nền tảng AI Studio chưa cấp phát máy chủ preview này ra ngoài (chưa bấm Share).</li>
-                    <li><strong>Cách gửi cho trường khác dùng được ngay 100%:</strong> Khi trường thầy hoặc trường đối tác triển khai lên Web Hosting công khai (như Netlify, Vercel, Cloudflare Pages hoặc tên miền riêng của trường <code>.edu.vn</code>), thầy chỉ cần bấm vào <strong>"Tự nhập Domain riêng"</strong> ở trên và điền link trang web đó vào. Phần mềm sẽ tự động sinh liên kết kèm bản quyền để gửi cho trường họ mở được ngay trên mọi thiết bị!</li>
+                    <li><strong>Vì sao link ais-pre bị lỗi 404 (Page not found)?</strong> Do Google Cloud Run chỉ kích hoạt link <code>ais-pre</code> khi Thầy bấm nút <strong>"Share"</strong> ở góc trên bên phải giao diện AI Studio. Nếu chưa bấm Share thì máy chủ Google sẽ báo lỗi 404.</li>
+                    <li><strong>Để Thầy tự kiểm tra đăng nhập ngay trên máy tính của Thầy:</strong> Giữ nguyên nút màu xanh <strong>"Link Đang chạy (Kiểm tra & Vào ngay)"</strong> và bấm nút <em>"Mở thử link này ngay"</em> ở bên dưới $\rightarrow$ Trình duyệt sẽ mở tab mới và nhận diện trường 100% không bao giờ bị lỗi 404!</li>
+                    <li><strong>Để gửi cho trường bạn dùng vĩnh viễn trên mọi thiết bị:</strong> Triển khai mã nguồn lên Vercel hoặc Cloudflare Pages (miễn phí 100%), sau đó chọn <strong>"Tự nhập Domain riêng"</strong> và điền địa chỉ web đó vào. Phần mềm sẽ tự động tạo link chuyên dụng gửi đối tác mở được ngay.</li>
                   </ul>
                 </div>
                 {handoverDomainMode === 'CUSTOM' && (
@@ -1905,11 +2017,11 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                   href={getPublicSharedUrl(handoverModalLicense)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-blue-700 hover:text-blue-900 hover:bg-blue-50 border border-blue-200 transition"
-                  title="Mở thử link công khai trong tab mới để kiểm tra"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 transition"
+                  title="Mở thử link này trong tab mới để kiểm tra ngay"
                 >
-                  <ExternalLink className="w-4 h-4 text-blue-600" />
-                  <span>Mở thử link công khai</span>
+                  <ExternalLink className="w-4 h-4 text-emerald-700" />
+                  <span>Mở thử link này ngay</span>
                 </a>
 
                 <div className="flex items-center gap-2">

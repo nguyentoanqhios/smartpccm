@@ -913,17 +913,6 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
           </table>
         </div>
 
-        {/* COMPACT ABBREVIATION LEGEND FOOTNOTE FOR PRINT & REVIEW */}
-        <div className="mt-4 pt-2.5 border-t border-slate-200 text-[10.5px] text-slate-600 leading-relaxed font-sans">
-          <span className="font-bold text-slate-800 uppercase text-[10px] tracking-wide">
-            * Ký hiệu viết tắt trong biểu:
-          </span>{' '}
-          {abbreviationRules
-            .slice(0, 16)
-            .map((r) => `${r.abbreviatedText}: ${r.originalText}`)
-            .join(' • ')}
-          {abbreviationRules.length > 16 && ' ...'}
-        </div>
 
         {/* SIGNATURE BLOCK */}
         <div className="grid grid-cols-3 gap-4 pt-8 mt-6 text-center text-slate-800">

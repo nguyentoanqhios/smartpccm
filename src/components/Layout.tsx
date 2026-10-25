@@ -44,7 +44,10 @@ import {
   LogOut,
   Cloud,
   CloudUpload,
+  UploadCloud,
   Plus,
+  Save,
+  RotateCcw,
 } from 'lucide-react';
 import { dataStore, isSuperAdminEmail, isThongKeSchool } from '../repositories/dataStore';
 import { auth } from '../firebase/config';
@@ -127,17 +130,43 @@ export const Layout: React.FC<LayoutProps> = ({
   const [currentSchoolId, setCurrentSchoolId] = useState<string>(() => dataStore.getSchoolId());
   const [isTeachingPlanModalOpen, setIsTeachingPlanModalOpen] = useState(false);
   const [isVersionBackupModalOpen, setIsVersionBackupModalOpen] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(() => dataStore.hasUnsavedChanges());
+  const [isExitPromptOpen, setIsExitPromptOpen] = useState(false);
+  const [pendingNavTab, setPendingNavTab] = useState<ActiveTab | null>(null);
+  const [isTabSwitchPromptOpen, setIsTabSwitchPromptOpen] = useState(false);
 
-  // Ref & click-outside listener to auto-collapse user profile dropdown
+  const handleNavTabClick = (targetTab: string) => {
+    if (targetTab === 'version-backups') {
+      setIsVersionBackupModalOpen(true);
+      return;
+    }
+    if (targetTab === 'school-info') {
+      onOpenSchoolSetup?.();
+      return;
+    }
+    if (hasUnsavedChanges && targetTab !== activeTab) {
+      setPendingNavTab(targetTab as ActiveTab);
+      setIsTabSwitchPromptOpen(true);
+    } else {
+      setActiveTab(targetTab as ActiveTab);
+    }
+  };
+
+  // Ref & click-outside listener to auto-collapse user profile and SAVE dropdowns
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setIsUserMenuOpen(false);
       }
+      if (saveMenuRef.current && !saveMenuRef.current.contains(e.target as Node)) {
+        setIsSaveMenuOpen(false);
+      }
     };
-    if (isUserMenuOpen) {
+    if (isUserMenuOpen || isSaveMenuOpen) {
       document.addEventListener('mousedown', handleOutsideClick);
       document.addEventListener('touchstart', handleOutsideClick);
     }
@@ -145,7 +174,7 @@ export const Layout: React.FC<LayoutProps> = ({
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('touchstart', handleOutsideClick);
     };
-  }, [isUserMenuOpen]);
+  }, [isUserMenuOpen, isSaveMenuOpen]);
 
   const toggleSidebar = () => {
     setIsSidebarCollapsed((prev) => {
@@ -167,6 +196,7 @@ export const Layout: React.FC<LayoutProps> = ({
       setUsersList(dataStore.getUsers());
       setCloudStatus(dataStore.getCloudSyncStatus());
       setCurrentSchoolId(dataStore.getSchoolId());
+      setHasUnsavedChanges(dataStore.hasUnsavedChanges());
     });
 
     const handleFullscreenChange = () => {
@@ -205,12 +235,23 @@ export const Layout: React.FC<LayoutProps> = ({
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
 
+    // Cảnh báo người dùng khi thoát hoặc đóng tab nếu còn dữ liệu mới chưa đẩy lên Cloud
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (dataStore.hasUnsavedChanges()) {
+        e.preventDefault();
+        e.returnValue = 'Dữ liệu mới chỉnh sửa chưa được đẩy lên Cloud! Bạn có muốn lưu trước khi thoát không?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       unsub();
       unsubToast();
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
       window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [onOpenGlobalSearch]);
 
@@ -249,13 +290,9 @@ export const Layout: React.FC<LayoutProps> = ({
   const currentVersion = versions.find((v) => v.id === context.versionId) || versions[0];
   const isLocked = currentVersion?.status === 'locked';
   const detectedUrlId = dataStore.detectUrlSchoolId();
-  const isSuperUser = Boolean(
-    isSuperAdminEmail(currentUser.email) ||
-    currentUser.isSuperAdmin ||
-    isSuperAdminEmail(auth.currentUser?.email)
-  );
+  // CHỦ SỞ HỮU / QUẢN TRỊ VIÊN TỐI CAO: Chỉ cấp quyền tối cao khi email tài khoản hiện tại khớp chính xác email Super Admin
+  const isMasterSuperAdmin = Boolean(isSuperAdminEmail(currentUser?.email));
   const isTenant = Boolean(detectedUrlId && detectedUrlId !== 'school_quyhop') || currentSchoolId !== 'school_quyhop' || (Boolean(currentUser.schoolId) && currentUser.schoolId !== 'school_quyhop');
-  const isMasterSuperAdmin = isSuperUser;
   const licenseCheck = dataStore.checkSchoolLicense();
 
   // Menu bên trái viết chữ in và sắp xếp:
@@ -478,6 +515,69 @@ export const Layout: React.FC<LayoutProps> = ({
                 <span className="hidden sm:inline">Thông báo</span>
               </button>
 
+              {/* NÚT SAVE & DROPDOWN 2 LỰA CHỌN GỌN GÀNG */}
+              <div className="relative" ref={saveMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsSaveMenuOpen((prev) => !prev)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer border active:scale-95 ${
+                    hasUnsavedChanges
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500 shadow-md animate-pulse'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border-slate-200 shadow-2xs'
+                  }`}
+                  title="Lưu dữ liệu trên máy hoặc đẩy lên Cloud"
+                >
+                  <Save className={`w-4 h-4 ${hasUnsavedChanges ? 'text-white' : 'text-blue-700'}`} />
+                  <span>SAVE</span>
+                  {hasUnsavedChanges && (
+                    <span className="w-2 h-2 rounded-full bg-amber-300 ring-2 ring-amber-500 animate-ping" />
+                  )}
+                  <ChevronDown className={`w-3.5 h-3.5 ${hasUnsavedChanges ? 'text-white/80' : 'text-slate-400'}`} />
+                </button>
+
+                {isSaveMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 space-y-1">
+                    <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Tùy chọn lưu dữ liệu
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        dataStore.saveLocalNow();
+                        toastService.success('Đã lưu tất cả thay đổi thành công vào máy!');
+                        setIsSaveMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs hover:bg-emerald-50 text-slate-800 hover:text-emerald-950 transition flex items-center gap-2.5 font-bold cursor-pointer group"
+                    >
+                      <div className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg group-hover:scale-105 transition-transform">
+                        <Download className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-slate-900 font-bold">1. Lưu tạm trên máy này</div>
+                        <div className="text-[10px] text-slate-500 font-normal">Lưu nhanh vào bộ nhớ trình duyệt</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSaveMenuOpen(false);
+                        setIsCloudSyncOpen(true);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs hover:bg-blue-50 text-slate-800 hover:text-blue-950 transition flex items-center gap-2.5 font-bold cursor-pointer group"
+                    >
+                      <div className="p-1.5 bg-blue-100 text-blue-700 rounded-lg group-hover:scale-105 transition-transform">
+                        <CloudUpload className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-slate-900 font-bold">2. Lưu lên Cloud ngay</div>
+                        <div className="text-[10px] text-slate-500 font-normal">Đẩy dữ liệu lên Cloud Firestore</div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button
                 id="header-import-export-btn"
                 onClick={onOpenImportExport}
@@ -539,14 +639,14 @@ export const Layout: React.FC<LayoutProps> = ({
                     <div className="max-h-64 overflow-y-auto py-1">
                       {uniqueUsersList
                         .filter((p) => {
-                          if (isSuperUser) return true;
+                          if (isMasterSuperAdmin) return true;
                           return (p.schoolId || 'school_quyhop') === currentSchoolId && !p.isSuperAdmin && !isSuperAdminEmail(p.email);
                         })
                         .map((profile, idx) => (
                         <button
                           key={`usr_layout_${profile.id}_${idx}`}
                           onClick={() => {
-                            if ((profile.isSuperAdmin || isSuperAdminEmail(profile.email)) && !isSuperUser) {
+                            if ((profile.isSuperAdmin || isSuperAdminEmail(profile.email)) && !isMasterSuperAdmin) {
                               toastService.error('Chỉ Chủ sở hữu hệ thống mới có quyền truy cập tài khoản này!');
                               return;
                             }
@@ -607,7 +707,7 @@ export const Layout: React.FC<LayoutProps> = ({
                     )}
 
                     {isMasterSuperAdmin && (
-                      <div className="px-2 pt-1 border-t border-slate-100">
+                      <div className="px-2 pt-1 border-t border-slate-100 space-y-1">
                         <button
                           type="button"
                           id="menu-cloudflare-sync-btn"
@@ -635,10 +735,70 @@ export const Layout: React.FC<LayoutProps> = ({
                             title={`Trạng thái: ${cloudStatus}`}
                           />
                         </button>
+
+                        <button
+                          type="button"
+                          id="menu-sync-licenses-quick-btn"
+                          onClick={async () => {
+                            setIsUserMenuOpen(false);
+                            toastService.info('Đang đẩy đồng bộ cấu hình cho các trường lên Cloud...');
+                            try {
+                              const res = await dataStore.syncAllLicensesToCloud();
+                              if (res.success) {
+                                toastService.success(res.message || 'Đã đồng bộ cấu hình các trường lên Cloud!');
+                              } else {
+                                toastService.error(res.message || 'Lỗi khi đẩy cấu hình lên Cloud');
+                              }
+                            } catch (e: any) {
+                              toastService.error(e?.message || 'Lỗi đồng bộ cấu hình');
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs flex items-center justify-between text-emerald-950 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition cursor-pointer font-black border border-emerald-300 shadow-2xs"
+                          title="Đẩy đồng bộ ngay lập tức cấu hình bản quyền các trường học lên Cloud Firestore (Vercel)"
+                        >
+                          <div className="flex items-center gap-2">
+                            <UploadCloud className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <span className="font-extrabold text-[11px] tracking-tight text-emerald-950">
+                              ĐỒNG BỘ CẤU HÌNH CÁC TRƯỜNG
+                            </span>
+                          </div>
+                          <span className="text-[9px] bg-emerald-200 text-emerald-900 px-1.5 py-0.5 rounded-md font-bold uppercase">
+                            Push
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          id="menu-publish-system-schema-btn"
+                          onClick={async () => {
+                            setIsUserMenuOpen(false);
+                            if (window.confirm('Bạn có chắc chắn muốn đẩy Cấu trúc hệ thống mẫu (Khung môn học, phân phối số tiết, danh mục kiêm nhiệm, quy tắc viết tắt) lên Cloud cho TẤT CẢ các trường được cấp quyền tải về?')) {
+                              toastService.info('Đang phát hành cấu trúc hệ thống lên Cloud...');
+                              const res = await dataStore.publishSystemSchemaToCloud();
+                              if (res.success) {
+                                toastService.success(res.message);
+                              } else {
+                                toastService.error(res.message);
+                              }
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs flex items-center justify-between text-indigo-950 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition cursor-pointer font-black border border-indigo-300 shadow-2xs"
+                          title="Đẩy mẫu khung môn học, số tiết và danh mục chuẩn lên Cloud cho các trường tải về"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-indigo-700 shrink-0" />
+                            <span className="font-extrabold text-[11px] tracking-tight text-indigo-950">
+                              ĐẨY CẤU TRÚC HỆ THỐNG
+                            </span>
+                          </div>
+                          <span className="text-[9px] bg-indigo-200 text-indigo-900 px-1.5 py-0.5 rounded-md font-bold uppercase">
+                            Push Schema
+                          </span>
+                        </button>
                       </div>
                     )}
 
-                    <div className="px-3 pt-2 text-[11px] text-slate-500">
+                    <div className="px-3 py-2 text-[11px] text-slate-500">
                       Đang dùng: <strong className="text-slate-800">{currentUser.name}</strong> ({currentUser.permission === 'edit' ? 'Có quyền sửa' : 'Chỉ xem'})
                     </div>
 
@@ -648,7 +808,11 @@ export const Layout: React.FC<LayoutProps> = ({
                           type="button"
                           onClick={() => {
                             setIsUserMenuOpen(false);
-                            onSignOut();
+                            if (hasUnsavedChanges) {
+                              setIsExitPromptOpen(true);
+                            } else {
+                              onSignOut();
+                            }
                           }}
                           className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer font-bold"
                         >
@@ -678,6 +842,8 @@ export const Layout: React.FC<LayoutProps> = ({
         </button>
       )}
 
+
+
       {/* BODY CONTAINER: SIDEBAR + MAIN CONTENT */}
       <div className={`flex-1 flex ${isFullWidth || isFullscreen || isSidebarCollapsed || activeTab === 'bulk-management' ? 'w-full px-2 sm:px-4 lg:px-6' : 'max-w-7xl w-full mx-auto px-2 sm:px-6 lg:px-8'} py-4 gap-4 sm:gap-6 transition-all duration-200`}>
         {/* DESKTOP LEFT SIDEBAR */}
@@ -705,15 +871,7 @@ export const Layout: React.FC<LayoutProps> = ({
                 <button
                   key={item.id}
                   id={`nav-link-${item.id}`}
-                  onClick={() => {
-                    if (item.id === 'version-backups') {
-                      setIsVersionBackupModalOpen(true);
-                    } else if (item.id === 'school-info') {
-                      onOpenSchoolSetup?.();
-                    } else {
-                      setActiveTab(item.id as ActiveTab);
-                    }
-                  }}
+                  onClick={() => handleNavTabClick(item.id)}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs transition text-left group border-l-4 cursor-pointer ${
                     isActive
                       ? 'bg-blue-50/90 text-blue-950 font-bold border-blue-700 shadow-2xs'
@@ -906,13 +1064,7 @@ export const Layout: React.FC<LayoutProps> = ({
                       key={item.id}
                       onClick={() => {
                         setIsMobileMenuOpen(false);
-                        if (item.id === 'version-backups') {
-                          setIsVersionBackupModalOpen(true);
-                        } else if (item.id === 'school-info') {
-                          onOpenSchoolSetup?.();
-                        } else {
-                          setActiveTab(item.id as ActiveTab);
-                        }
+                        handleNavTabClick(item.id);
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold text-left border-l-4 transition ${
                         isActive
@@ -1070,6 +1222,148 @@ export const Layout: React.FC<LayoutProps> = ({
         isOpen={isVersionBackupModalOpen}
         onClose={() => setIsVersionBackupModalOpen(false)}
       />
+
+      {/* MODAL HỎI LƯU DỮ LIỆU KHI THOÁT / ĐĂNG XUẤT */}
+      {isExitPromptOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-amber-100 text-amber-700 rounded-2xl shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Dữ liệu mới chưa đẩy lên Cloud!</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Bạn có các thay đổi vừa nhập chưa được đồng bộ</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Bạn có muốn lưu tạm trên máy này hoặc đẩy dữ liệu lên Cloud trước khi đăng xuất / thoát phần mềm không?
+            </p>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExitPromptOpen(false);
+                  setIsCloudSyncOpen(true);
+                }}
+                className="w-full py-2.5 px-4 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <CloudUpload className="w-4 h-4 text-amber-300" />
+                <span>Lưu lên Cloud ngay (Khuyên dùng)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  dataStore.saveLocalNow();
+                  setIsExitPromptOpen(false);
+                  toastService.success('Đã lưu tạm vào máy thành công!');
+                  if (onSignOut) onSignOut();
+                }}
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Download className="w-4 h-4 text-slate-600" />
+                <span>Lưu tạm trên máy rồi thoát</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExitPromptOpen(false);
+                  dataStore.discardUnsavedChanges();
+                  if (onSignOut) onSignOut();
+                }}
+                className="w-full py-2 px-4 text-slate-400 hover:text-slate-600 text-xs font-semibold transition cursor-pointer text-center"
+              >
+                Không lưu & Thoát luôn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL HỎI LƯU DỮ LIỆU KHI CHUYỂN PHÂN HỆ / TAB */}
+      {isTabSwitchPromptOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-amber-100 text-amber-700 rounded-2xl shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Dữ liệu có thay đổi chưa lưu!</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Bạn đang có dữ liệu vừa chỉnh sửa chưa được lưu</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-amber-50/60 p-3 rounded-2xl border border-amber-200/80">
+              Bạn có muốn lưu các thay đổi này vào bộ nhớ máy hoặc đẩy lên Cloud trước khi chuyển sang mục khác không?
+            </p>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  dataStore.saveLocalNow();
+                  setHasUnsavedChanges(false);
+                  toastService.success('Đã lưu dữ liệu thành công!');
+                  if (pendingNavTab) {
+                    setActiveTab(pendingNavTab);
+                  }
+                  setIsTabSwitchPromptOpen(false);
+                  setPendingNavTab(null);
+                }}
+                className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Save className="w-4 h-4 text-emerald-200" />
+                <span>Lưu thay đổi & Chuyển tiếp</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTabSwitchPromptOpen(false);
+                  setIsCloudSyncOpen(true);
+                }}
+                className="w-full py-2.5 px-4 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <CloudUpload className="w-4 h-4 text-amber-300" />
+                <span>Lưu lên Cloud ngay</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  dataStore.discardUnsavedChanges();
+                  setHasUnsavedChanges(false);
+                  toastService.info('Đã bỏ qua các thay đổi chưa lưu.');
+                  if (pendingNavTab) {
+                    setActiveTab(pendingNavTab);
+                  }
+                  setIsTabSwitchPromptOpen(false);
+                  setPendingNavTab(null);
+                }}
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Bỏ qua thay đổi & Chuyển tiếp</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTabSwitchPromptOpen(false);
+                  setPendingNavTab(null);
+                }}
+                className="w-full py-2 px-4 text-slate-400 hover:text-slate-600 text-xs font-semibold transition cursor-pointer text-center"
+              >
+                Ở lại trang hiện tại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

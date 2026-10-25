@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="author" content="Nguyentoanqh" />
     <meta name="copyright" content="Nguyentoanqh" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>Phân công chuyên môn</title>
     <meta name="description" content="Hệ thống quản lý phân công chuyên môn, định mức tiết dạy, kiểm tra lỗi và lập báo cáo - Copyright Nguyentoanqh" />
     <meta property="og:title" content="Phân công chuyên môn" />
@@ -24,6 +27,20 @@
       // 1. Tự động hủy đăng ký toàn bộ Service Worker và dọn sạch CacheStorage trên MỌI môi trường
       // Ngăn chặn 100% sự cố trình duyệt lưu đệm file JS/HTML cũ dẫn đến lỗi tải trang
       (function() {
+        var BUILD_VERSION = 'v2026_10_24_sync_ver_3';
+        try {
+          var lastVer = localStorage.getItem('pccm_app_build_version');
+          if (lastVer !== BUILD_VERSION) {
+            localStorage.setItem('pccm_app_build_version', BUILD_VERSION);
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                for (var j = 0; j < names.length; j++) {
+                  caches.delete(names[j]);
+                }
+              }).catch(function() {});
+            }
+          }
+        } catch(e) {}
         try {
           if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(regs) {

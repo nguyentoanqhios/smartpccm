@@ -9,6 +9,7 @@ import {
   Plus,
   Edit2,
   Trash2,
+  Briefcase,
   Search,
   CheckCircle2,
   AlertTriangle,
@@ -49,6 +50,7 @@ import {
   ChevronLeft,
   ChevronRight,
   SlidersHorizontal,
+  Save,
 } from 'lucide-react';
 import {
   Teacher,
@@ -208,6 +210,15 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     }
   });
 
+  const uniqueSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    return subjects.filter((s) => {
+      if (!s || !s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+  }, [subjects]);
+
   // Column visibility state with persistence
   const [visibleColumns, setVisibleColumns] = useState<Record<TeacherColumnKey, boolean>>(() => {
     try {
@@ -266,11 +277,29 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
   const [selectedTeacherModal, setSelectedTeacherModal] = useState<Teacher | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [isFormDirty, setIsFormDirty] = useState(false);
+  const [showUnsavedEditPrompt, setShowUnsavedEditPrompt] = useState(false);
+
+  const handleRequestCloseEditModal = () => {
+    if (isFormDirty) {
+      setShowUnsavedEditPrompt(true);
+    } else {
+      setIsEditModalOpen(false);
+    }
+  };
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
   const [showTrashBin, setShowTrashBin] = useState(false);
   const [isBulkQuotaModalOpen, setIsBulkQuotaModalOpen] = useState(false);
+  const [isBulkClearDutiesModalOpen, setIsBulkClearDutiesModalOpen] = useState(false);
 
-  // Workplace Category Management Modal states
+  const handleConfirmBulkClearDuties = () => {
+    const idsToClear = selectedTeacherIds.length > 0 ? selectedTeacherIds : teachers.filter((t) => !t.isDeleted).map((t) => t.id);
+    if (idsToClear.length === 0) return;
+    const count = dataStore.bulkClearDutiesForTeachers(idsToClear);
+    showToast(`Đã xóa sạch phân công kiêm nhiệm của ${idsToClear.length} giáo viên (${count} mục phân công)!`);
+    setIsBulkClearDutiesModalOpen(false);
+    setSelectedTeacherIds([]);
+  };
   const [isWorkplaceModalOpen, setIsWorkplaceModalOpen] = useState(false);
   const [editingWp, setEditingWp] = useState<WorkplaceCategory | null>(null);
   const [wpName, setWpName] = useState('');
@@ -516,6 +545,8 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     setFormTimetableName('');
     setFormPositions([]);
     setFormSubjects([]);
+    setIsFormDirty(false);
+    setShowUnsavedEditPrompt(false);
     setIsEditModalOpen(true);
   };
 
@@ -536,17 +567,28 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
       workplaces.find((w) => w.name === t.workplace) ||
       workplaces.find((w) => w.isDefault) ||
       workplaces[0];
-    setFormWorkplaceId(matchedWp?.id || '');
     setFormStatus(t.status);
-    setFormQuota(t.standardQuota || 19);
+    let defaultQuotaForT = 19;
+    if (t.status === 'PRINCIPAL') defaultQuotaForT = 2;
+    else if (t.status === 'VICE_PRINCIPAL') defaultQuotaForT = 4;
+    const initialQuota =
+      t.standardQuota !== undefined &&
+      t.standardQuota !== null &&
+      !(t.standardQuota === 19 && (t.status === 'PRINCIPAL' || t.status === 'VICE_PRINCIPAL'))
+        ? t.standardQuota
+        : defaultQuotaForT;
+    setFormQuota(initialQuota);
     setFormMajor(t.major || '');
     setFormPhone(t.phone || '');
     setFormEmail(t.email || '');
     setFormBdHsgInfo(t.bdHsgInfo || '');
     setFormOffDay(t.offDay || '');
     setFormNotes(t.notes || '');
-    setFormPositions(t.positions || []);
+    const curPos = getTeacherPositions(t, departments, duties, dataStore.getAssignments());
+    setFormPositions(Array.from(new Set([...(t.positions || []), ...curPos])));
     setFormSubjects(Array.from(new Set((t.subjectsCanTeach || []).map((s) => s.trim()).filter(Boolean))));
+    setIsFormDirty(false);
+    setShowUnsavedEditPrompt(false);
     setIsEditModalOpen(true);
   };
 
@@ -582,6 +624,8 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     setFormNotes(t.notes || '');
     setFormPositions(t.positions || []);
     setFormSubjects(Array.from(new Set((t.subjectsCanTeach || []).map((s) => s.trim()).filter(Boolean))));
+    setIsFormDirty(true);
+    setShowUnsavedEditPrompt(false);
     setIsEditModalOpen(true);
     showToast(`Đã tạo bản sao từ giáo viên "${t.fullName}". Bạn có thể tinh chỉnh và lưu lại!`);
   };
@@ -609,15 +653,9 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
 
     if (editingTeacher) {
       const oldQuota = editingTeacher.standardQuota ?? 19;
-      // Thu thập và chuẩn hóa danh sách chức vụ, loại bỏ trùng lặp và các chức danh thuộc tổ bị xóa
-      const curPositions = getTeacherPositions(
-        editingTeacher,
-        departments,
-        duties,
-        dataStore.getAssignments()
-      );
+      // Lấy chính xác danh sách chức vụ theo lựa chọn trong Form do người dùng xác nhận
       const cleanPositions: string[] = Array.from(
-        new Set([...curPositions, ...formPositions].map((p) => normalizePositionName(p)).filter((p): p is string => Boolean(p)))
+        new Set(formPositions.map((p) => normalizePositionName(p)).filter((p): p is string => Boolean(p)))
       );
 
       dataStore.updateTeacher(editingTeacher.id, {
@@ -659,6 +697,8 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
         });
       }
 
+      setIsFormDirty(false);
+      setShowUnsavedEditPrompt(false);
       showToast(`Đã cập nhật hồ sơ giáo viên "${formName.trim()}"`);
       setIsEditModalOpen(false);
     } else {
@@ -717,6 +757,8 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
           const nextNum = teachers.length + 2;
           setFormCode(`GV_${String(nextNum).padStart(3, '0')}`);
         } else {
+          setIsFormDirty(false);
+          setShowUnsavedEditPrompt(false);
           showToast(`Đã thêm mới giáo viên "${formName.trim()}"`);
           setIsEditModalOpen(false);
         }
@@ -1107,6 +1149,19 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
 
             {canEdit && (
               <button
+                id="btn-bulk-clear-duties-header"
+                type="button"
+                onClick={() => setIsBulkClearDutiesModalOpen(true)}
+                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-300 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                title="Xóa toàn bộ nhiệm vụ kiêm nhiệm của tất cả giáo viên trong trường hoặc các giáo viên được chọn"
+              >
+                <Briefcase className="w-4 h-4 text-indigo-700" />
+                <span>Xóa kiêm nhiệm</span>
+              </button>
+            )}
+
+            {canEdit && (
+              <button
                 id="btn-add-teacher"
                 onClick={handleOpenAddModal}
                 className="bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
@@ -1232,9 +1287,9 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
             >
               <option value="ALL">Tất cả trạng thái</option>
               <option value="ACTIVE">Đang giảng dạy</option>
-              <option value="MATERNITY">Nghỉ thai sản (Miễn 19)</option>
-              <option value="PRINCIPAL">Hiệu trưởng (Miễn 17)</option>
-              <option value="VICE_PRINCIPAL">Phó hiệu trưởng (Miễn 15)</option>
+              <option value="MATERNITY">Nghỉ thai sản</option>
+              <option value="PRINCIPAL">Hiệu trưởng (Quy định 2 tiết/tuần)</option>
+              <option value="VICE_PRINCIPAL">Phó hiệu trưởng (Quy định 4 tiết/tuần)</option>
               <option value="PROBATIONARY">Tập sự (Miễn 2)</option>
               <option value="SECONDED">Biệt phái</option>
             </select>
@@ -1317,6 +1372,16 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                   >
                     <Sliders className="w-3.5 h-3.5" />
                     <span>Sửa định mức ({selectedTeacherIds.length} GV)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkClearDutiesModalOpen(true)}
+                    className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                    title="Xóa toàn bộ nhiệm vụ kiêm nhiệm của các giáo viên đã chọn"
+                  >
+                    <Briefcase className="w-3.5 h-3.5" />
+                    <span>Xóa kiêm nhiệm ({selectedTeacherIds.length} GV)</span>
                   </button>
 
                   <button
@@ -2521,7 +2586,8 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                 </div>
               </div>
               <button
-                onClick={() => setIsEditModalOpen(false)}
+                type="button"
+                onClick={handleRequestCloseEditModal}
                 className="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -2529,7 +2595,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
             </div>
 
             {/* Form Form Content */}
-            <form onSubmit={handleSaveTeacher} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
+            <form onSubmit={handleSaveTeacher} onChange={() => setIsFormDirty(true)} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
               {/* Group 1: Thông tin nhân thân */}
               <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
                 <div className="font-bold text-blue-950 flex items-center gap-1.5 border-b border-slate-200 pb-2">
@@ -2674,7 +2740,13 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Định mức tiết chuẩn (tiết/tuần)</label>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      {formStatus === 'PRINCIPAL'
+                        ? 'Số tiết dạy quy định của Hiệu trưởng (tiết/tuần)'
+                        : formStatus === 'VICE_PRINCIPAL'
+                        ? 'Số tiết dạy quy định của Phó HT (tiết/tuần)'
+                        : 'Định mức tiết chuẩn (tiết/tuần)'}
+                    </label>
                     <input
                       type="number"
                       value={formQuota}
@@ -2683,6 +2755,11 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                       max="35"
                       className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-bold text-blue-800 focus:ring-2 focus:ring-blue-600 focus:outline-none"
                     />
+                    {(formStatus === 'PRINCIPAL' || formStatus === 'VICE_PRINCIPAL') && (
+                      <p className="text-[11px] text-amber-700 font-medium mt-1 leading-tight">
+                        * Theo TT 28/2009: {formStatus === 'PRINCIPAL' ? 'Hiệu trưởng dạy 2 tiết/tuần' : 'Phó Hiệu trưởng dạy 4 tiết/tuần'}. Hệ thống tính đủ theo số tiết quy định này riêng, không tính vào kiêm nhiệm hay miễn giảm.
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -2692,7 +2769,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                     Các môn có thể đảm nhiệm giảng dạy (nhấp để chọn / bỏ chọn):
                   </label>
                   <div className="flex flex-wrap gap-1.5 p-2 bg-white rounded-xl border border-slate-200 max-h-36 overflow-y-auto">
-                    {subjects.map((sub) => {
+                    {uniqueSubjects.map((sub) => {
                       const isSelected = formSubjects.includes(sub.name) || formSubjects.includes(sub.id);
                       return (
                         <button
@@ -2763,13 +2840,23 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                     <label className="block font-semibold text-slate-700 mb-1">Trạng thái công tác *</label>
                     <select
                       value={formStatus}
-                      onChange={(e) => setFormStatus(e.target.value as any)}
+                      onChange={(e) => {
+                        const newStatus = e.target.value as any;
+                        setFormStatus(newStatus);
+                        if (newStatus === 'PRINCIPAL' && (!formQuota || formQuota === 19)) {
+                          setFormQuota(2);
+                        } else if (newStatus === 'VICE_PRINCIPAL' && (!formQuota || formQuota === 19)) {
+                          setFormQuota(4);
+                        } else if (newStatus === 'ACTIVE' && (formQuota === 2 || formQuota === 4)) {
+                          setFormQuota(19);
+                        }
+                      }}
                       className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-medium cursor-pointer"
                     >
                       <option value="ACTIVE">Đang giảng dạy (ĐM 19)</option>
-                      <option value="MATERNITY">Nghỉ thai sản (Miễn 19)</option>
-                      <option value="PRINCIPAL">Hiệu trưởng (Miễn 17)</option>
-                      <option value="VICE_PRINCIPAL">Phó hiệu trưởng (Miễn 15)</option>
+                      <option value="MATERNITY">Nghỉ thai sản</option>
+                      <option value="PRINCIPAL">Hiệu trưởng (Quy định 2 tiết/tuần)</option>
+                      <option value="VICE_PRINCIPAL">Phó hiệu trưởng (Quy định 4 tiết/tuần)</option>
                       <option value="PROBATIONARY">Tập sự (Miễn 2)</option>
                       <option value="SECONDED">Biệt phái</option>
                     </select>
@@ -2856,7 +2943,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
               <div className="flex justify-end items-center gap-2.5 pt-3 border-t border-slate-200 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setIsEditModalOpen(false)}
+                  onClick={handleRequestCloseEditModal}
                   className="px-4 py-2.5 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition cursor-pointer"
                 >
                   Hủy bỏ
@@ -2879,6 +2966,62 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL HỎI LƯU THÔNG TIN GIÁO VIÊN TRƯỚC KHI THOÁT / ĐÓNG MODAL */}
+      {showUnsavedEditPrompt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-amber-100 text-amber-800 rounded-2xl shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Dữ liệu hồ sơ có thay đổi!</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Bạn có muốn lưu các thông tin vừa chỉnh sửa trước khi thoát không?</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-amber-50/60 p-3 rounded-2xl border border-amber-200/80">
+              Nếu bạn thoát mà không lưu, các thay đổi vừa nhập (mã, tên, định mức, môn giảng dạy, nơi làm việc...) sẽ bị hủy bỏ.
+            </p>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  setShowUnsavedEditPrompt(false);
+                  handleSaveTeacher(e);
+                }}
+                className="w-full py-2.5 px-4 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Save className="w-4 h-4 text-emerald-400" />
+                <span>Lưu thay đổi & Đóng</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFormDirty(false);
+                  setShowUnsavedEditPrompt(false);
+                  setIsEditModalOpen(false);
+                }}
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-rose-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                <span>Bỏ qua thay đổi & Đóng</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowUnsavedEditPrompt(false)}
+                className="w-full py-2 px-4 text-slate-500 hover:text-slate-800 text-xs font-semibold transition cursor-pointer text-center"
+              >
+                Ở lại tiếp tục chỉnh sửa
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3058,6 +3201,48 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 {bulkDeleteMode === 'PERMANENT' ? 'Xác nhận xóa vĩnh viễn' : 'Đồng ý chuyển thùng rác'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: XÁC NHẬN XÓA KIÊM NHIỆM HÀNG LOẠT GIÁO VIÊN TRONG TEACHER MANAGEMENT */}
+      {isBulkClearDutiesModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-indigo-700">
+              <div className="p-2.5 rounded-2xl bg-indigo-100">
+                <Briefcase className="w-6 h-6 text-indigo-700" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Xóa kiêm nhiệm hàng loạt</h3>
+                <p className="text-xs text-slate-500">Đã chọn {selectedTeacherIds.length} giáo viên</p>
+              </div>
+            </div>
+            <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 text-xs space-y-2 text-indigo-950">
+              <div>
+                Bạn có chắc chắn muốn xóa toàn bộ phân công kiêm nhiệm của <strong>{selectedTeacherIds.length} giáo viên</strong> đã chọn?
+              </div>
+              <p className="text-[11px] text-indigo-800">
+                Hệ thống sẽ xóa triệt để mọi nhiệm vụ kiêm nhiệm, thu hồi vai trò Tổ trưởng/Tổ phó/Chủ nhiệm, cập nhật hồ sơ và tính lại định mức tiết dạy.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkClearDutiesModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkClearDuties}
+                className="px-4 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Briefcase className="w-4 h-4" />
+                <span>Xác nhận Xóa kiêm nhiệm</span>
               </button>
             </div>
           </div>
@@ -3369,6 +3554,57 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
           </div>
         );
       })()}
+
+      {/* ========================================================================= */}
+      {/* MODAL: XÁC NHẬN XÓA KIÊM NHIỆM HÀNG LOẠT */}
+      {/* ========================================================================= */}
+      {isBulkClearDutiesModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-indigo-700">
+              <div className="p-2.5 rounded-2xl bg-indigo-100">
+                <Briefcase className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Xóa kiêm nhiệm hàng loạt</h3>
+                <p className="text-xs text-slate-500">Thu hồi toàn bộ nhiệm vụ kiêm nhiệm đã chọn</p>
+              </div>
+            </div>
+
+            <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 text-xs space-y-2 text-indigo-950">
+              <div>
+                Bạn có chắc chắn muốn xóa toàn bộ phân công kiêm nhiệm của{' '}
+                <strong className="text-indigo-900 font-bold text-sm">
+                  {selectedTeacherIds.length > 0
+                    ? `${selectedTeacherIds.length} giáo viên đã chọn`
+                    : `tất cả ${teachers.filter((t) => !t.isDeleted).length} giáo viên trong trường`}
+                </strong>?
+              </div>
+              <p className="text-[11px] text-indigo-800">
+                Hệ thống sẽ đồng thời cập nhật lại hồ sơ giáo viên, thu hồi phân công kiêm nhiệm và tính toán lại định mức tiết dạy.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkClearDutiesModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkClearDuties}
+                className="px-4 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Briefcase className="w-4 h-4" />
+                <span>Xác nhận Xóa kiêm nhiệm</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* BULK TEACHER QUOTA MODAL */}

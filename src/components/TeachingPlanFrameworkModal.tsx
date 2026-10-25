@@ -629,7 +629,7 @@ export const TeachingPlanFrameworkModal: React.FC<TeachingPlanFrameworkModalProp
   const handleExportCSV = () => {
     let csv = '\uFEFF';
     csv += `${schoolName.toUpperCase()} - NĂM HỌC ${schoolYear}\n`;
-    csv += `KHUNG KẾ HOẠCH DẠY HỌC & TỔNG HỢP SỐ TIẾT TOÀN TRƯỜNG\n\n`;
+    csv += `KHUNG KẾ HOẠCH VÀ TỔNG SỐ TIẾT:\n\n`;
 
     // 1. TỔNG HỢP TOÀN TRƯỜNG
     csv += `BẢNG TỔNG HỢP TIẾT THỰC DẠY, ĐỊNH MỨC VÀ TIẾT VƯỢT GIỜ\n`;
@@ -682,7 +682,7 @@ export const TeachingPlanFrameworkModal: React.FC<TeachingPlanFrameworkModalProp
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-black text-white tracking-wide uppercase">
-                  KHUNG KẾ HOẠCH DẠY HỌC & TỔNG HỢP SỐ TIẾT TOÀN TRƯỜNG
+                  KHUNG KẾ HOẠCH VÀ TỔNG SỐ TIẾT:
                 </span>
                 <span className="bg-amber-400 text-blue-950 font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">
                   CT GDPT 2018
@@ -1305,7 +1305,7 @@ export const TeachingPlanFrameworkModal: React.FC<TeachingPlanFrameworkModalProp
                               colSpan={gradePlan.grade === 9 ? 6 : 4}
                               className="py-2 px-3 text-center border-r border-slate-300 bg-amber-50/80 text-amber-950 font-black"
                             >
-                              Buổi 2 (Tăng cường & Bồi dưỡng)
+                              Buổi 2
                             </th>
                             <th rowSpan={2} className="py-2.5 px-3 text-right bg-slate-100 text-slate-900 font-black">
                               Tổng cộng

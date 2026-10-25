@@ -31,7 +31,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { dataStore, isSameEmail, isSuperAdminEmail, isThongKeSchool, isSystemSyncEmail } from '../repositories/dataStore';
-import { UserProfile } from '../types';
+import { UserProfile, SchoolTenantLicense } from '../types';
 
 interface LoginViewProps {
   onLoginSuccess?: (user: UserProfile) => void;
@@ -78,6 +78,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   // Lắng nghe dữ liệu trường & tải license từ Firestore nếu cần
   React.useEffect(() => {
+    // Luôn tải danh sách bản quyền mới nhất từ Cloud Firestore khi mở trang đăng nhập
+    dataStore.loadLicensesFromCloud().catch(() => {});
+
     if (initialSchoolId && initialSchoolId !== 'school_quyhop') {
       dataStore.ensureSchoolLicenseLoaded(initialSchoolId).then((loadedLic) => {
         if (loadedLic) {
@@ -303,6 +306,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
     const allLicenses = dataStore.getSchoolLicenses();
     let matchingLicense = allLicenses.find((l) => isSameEmail(l.adminEmail, trimmedEmail));
 
+    // Nếu chưa thấy trong bộ nhớ, tìm thêm trong danh sách backup đã lưu của browser
+    if (!matchingLicense && typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('pccm_all_registered_school_licenses');
+        if (raw) {
+          const backupLics = JSON.parse(raw) as SchoolTenantLicense[];
+          matchingLicense = backupLics.find((l) => isSameEmail(l.adminEmail, trimmedEmail));
+          if (matchingLicense) {
+            dataStore.saveSchoolLicense(matchingLicense);
+          }
+        }
+      } catch {}
+    }
+
     // Xác định mã trường mục tiêu: Ưu tiên license khớp email -> detectedUrlSchoolId -> schoolId đã chọn
     let targetSchoolId = matchingLicense?.id;
     if (!targetSchoolId) {
@@ -322,7 +339,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     const isSuperAdmin = isSuperAdminEmail(trimmedEmail);
 
-    // Ngăn chặn tài khoản trường ngoài đăng nhập nhầm vào school_quyhop bằng mật khẩu mặc định 123456
+    // Ngăn chặn tài khoản trường ngoài đăng nhập nhầm vào school_quyhop
     if (!isSuperAdmin && targetSchoolId === 'school_quyhop') {
       const isQuyHopTeacher = dataStore.getUsers().some((u) => (u.schoolId === 'school_quyhop' || !u.schoolId) && isSameEmail(u.email, trimmedEmail));
       if (!isQuyHopTeacher) {
@@ -360,18 +377,23 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     // XÁC THỰC MẬT KHẨU VÀ ĐĂNG NHẬP
     const assignedPass = targetLic?.assignedPasswordHint?.trim() || (urlParams.schoolId === targetSchoolId ? urlParams.pass?.trim() : undefined);
-    const hasSpecificAssignedPass = Boolean(assignedPass && assignedPass !== '123456');
 
     let isValidPass = false;
     if (isSuperAdmin) {
       isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
-    } else if (targetLic && assignedPass) {
-      // Trường được cấp quyền riêng: Bắt buộc đúng mật khẩu được cấp
-      isValidPass = password === assignedPass;
+    } else if (targetSchoolId !== 'school_quyhop') {
+      // Trường được cấp quyền riêng: BẮT BUỘC ĐÚNG MẬT KHẨU ĐƯỢC CẤP (Tuyệt đối không dùng mật khẩu mặc định 123456)
+      if (assignedPass) {
+        isValidPass = password === assignedPass;
+      } else if (urlParams.pass) {
+        isValidPass = password === urlParams.pass.trim();
+      } else {
+        isValidPass = false;
+      }
       if (!isValidPass) {
         setIsLoading(false);
         setErrorType('INVALID_CREDENTIAL');
-        setErrorMessage('Mật khẩu không chính xác! Vui lòng nhập đúng email và mật khẩu do Ban Quản trị cấp.');
+        setErrorMessage('Mật khẩu không chính xác! Vui lòng nhập đúng mật khẩu được Ban Quản trị cấp cho trường học của bạn.');
         return;
       }
     } else {
@@ -589,12 +611,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const DEFAULT_SHARED_URL = 'https://ais-pre-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
-                  let base = DEFAULT_SHARED_URL;
+                  let base = '';
                   if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
-                    let origin = window.location.origin;
+                    const origin = window.location.origin;
                     if (!origin.includes('localhost') && !origin.includes('127.0.0.1')) {
                       base = `${origin.replace('ais-dev-', 'ais-pre-')}${window.location.pathname.replace(/\/$/, '')}`;
+                    } else {
+                      base = `${origin}${window.location.pathname.replace(/\/$/, '')}`;
                     }
                   }
                   const params = new URLSearchParams();
@@ -602,6 +625,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   if (schoolName) params.set('schoolName', schoolName);
                   const admEmail = urlParams.adminEmail || initialLicense?.adminEmail;
                   if (admEmail) params.set('adminEmail', admEmail);
+                  const passHint = urlParams.pass || initialLicense?.assignedPasswordHint;
+                  if (passHint) params.set('pass', passHint);
                   const fullUrl = `${base}?${params.toString()}`;
                   navigator.clipboard.writeText(fullUrl);
                   setSuccessMessage('Đã sao chép link đăng nhập của trường này!');
@@ -694,7 +719,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const host = typeof window !== 'undefined' ? window.location.hostname : 'ais-dev-hlghi3ofwxo7bobx6qx5ka-681486933126.asia-east1.run.app';
+                        const host = typeof window !== 'undefined' ? window.location.hostname : 'run.app';
                         navigator.clipboard.writeText(host);
                         setSuccessMessage(`Đã sao chép tên miền: ${host}`);
                         setTimeout(() => setSuccessMessage(null), 3000);
