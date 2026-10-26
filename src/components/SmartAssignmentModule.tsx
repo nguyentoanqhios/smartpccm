@@ -73,7 +73,7 @@ import {
 import { dataStore } from '../repositories/dataStore';
 import { calculateAllTeachersWorkload, calculateTeacherWorkload } from '../calculation-engine/workloadCalculator';
 import { exportWorkloadExcel } from '../import-export/excelService';
-import { getSmartTeacherSuggestions, TeacherSuggestion } from '../utils/teacherSuggestionEngine';
+import { getSmartTeacherSuggestions, TeacherSuggestion, isSubjectSuggestedForTeacher } from '../utils/teacherSuggestionEngine';
 import { SearchableTeacherSelect } from './SearchableTeacherSelect';
 import { matchesQuery, matchesTeacherFullName, removeVietnameseTones } from '../utils/searchUtils';
 import { getTeacherPositions, normalizePositionName } from '../utils/teacherPositions';
@@ -206,6 +206,30 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
   const [teacherDeptFilter, setTeacherDeptFilter] = useState<string>('ALL');
   const [teacherStatusFilter, setTeacherStatusFilter] = useState<string>('ALL'); // ALL, EXACT, DEFICIT, SURPLUS, UNASSIGNED
   const [teacherMajorFilter, setTeacherMajorFilter] = useState<string>('ALL');
+
+  // Tích "Môn gợi ý" (Căn cứ chuyên môn, môn có thể dạy và môn cùng tổ của giáo viên)
+  const [filterSuggestedSubjectsOnly, setFilterSuggestedSubjectsOnly] = useState<boolean>(true);
+
+  // Chọn môn (Tích chọn một hoặc nhiều môn hiển thị để phân công)
+  const [selectedCustomSubjectIds, setSelectedCustomSubjectIds] = useState<string[]>([]);
+  const [isSubjectDropdownOpen, setIsSubjectDropdownOpen] = useState<boolean>(false);
+  const [subjectFilterSearch, setSubjectFilterSearch] = useState<string>('');
+  const subjectDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Đóng dropdown Chọn môn khi bấm ra ngoài
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (subjectDropdownRef.current && !subjectDropdownRef.current.contains(event.target as Node)) {
+        setIsSubjectDropdownOpen(false);
+      }
+    };
+    if (isSubjectDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isSubjectDropdownOpen]);
 
   // Class Filter & Selection States (for CLASS_SUBJECT mode)
   const [selectedClassId, setSelectedClassId] = useState<string>(() => {
@@ -538,14 +562,79 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
     };
   }, [scopedClasses, subjectsByGrade, scopedTeachers, localAssignments, teacherCalculationsMap]);
 
-  // Check if subject matches selected teacher's major or subjectsCanTeach
+  // Check if subject matches selected teacher's major, subjectsCanTeach, or department
   const isSubjectMatchingTeacher = (subject: Subject, teacher: Teacher | null): boolean => {
     if (!teacher) return false;
-    const canTeach = teacher.subjectsCanTeach || [];
-    if (canTeach.includes(subject.id) || canTeach.includes(subject.code)) return true;
-    if (teacher.major && subject.name.toLowerCase().includes(teacher.major.toLowerCase())) return true;
-    if (teacher.major && teacher.major.toLowerCase().includes(subject.name.toLowerCase())) return true;
-    return false;
+    const { isSuggested } = isSubjectSuggestedForTeacher(
+      subject,
+      teacher,
+      propDepartments,
+      localAssignments,
+      propTeachers
+    );
+    return isSuggested;
+  };
+
+  // Helper kiểm tra môn có được gợi ý cho giáo viên đang chọn hay không
+  const isSuggestedSubject = (subj: Subject): boolean => {
+    if (!currentSelectedTeacher) return false;
+    return isSubjectMatchingTeacher(subj, currentSelectedTeacher);
+  };
+
+  // Danh sách ID các môn gợi ý của giáo viên đang chọn
+  const suggestedSubjectIds = useMemo(() => {
+    if (!currentSelectedTeacher) return propSubjects.map((s) => s.id);
+    return propSubjects
+      .filter((s) => isSuggestedSubject(s))
+      .map((s) => s.id);
+  }, [currentSelectedTeacher, propSubjects, propDepartments, localAssignments, propTeachers]);
+
+  // Danh sách môn hiển thị trong dropdown Chọn môn
+  const filteredSubjectsForDropdown = useMemo(() => {
+    let list = propSubjects.filter((s) => s.active);
+    if (subjectFilterSearch.trim()) {
+      const q = subjectFilterSearch.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.code.toLowerCase().includes(q) ||
+          (s.shortName && s.shortName.toLowerCase().includes(q))
+      );
+    }
+    // Sắp xếp môn: Các môn gợi ý lên trước, sau đó theo tên
+    return [...list].sort((a, b) => {
+      const suggA = isSuggestedSubject(a);
+      const suggB = isSuggestedSubject(b);
+      if (suggA && !suggB) return -1;
+      if (!suggA && suggB) return 1;
+      return a.name.localeCompare(b.name, 'vi');
+    });
+  }, [propSubjects, subjectFilterSearch, currentSelectedTeacher, propDepartments, localAssignments, propTeachers]);
+
+  // Toggle môn trong danh sách chọn môn tùy biến
+  const handleToggleCustomSubject = (subjectId: string) => {
+    setSelectedCustomSubjectIds((prev) => {
+      if (prev.length === 0) {
+        return [subjectId];
+      }
+      if (prev.includes(subjectId)) {
+        return prev.filter((id) => id !== subjectId);
+      } else {
+        return [...prev, subjectId];
+      }
+    });
+  };
+
+  const handleSelectAllSubjects = () => {
+    setSelectedCustomSubjectIds(propSubjects.filter((s) => s.active).map((s) => s.id));
+  };
+
+  const handleClearSubjectFilter = () => {
+    setSelectedCustomSubjectIds([]);
+  };
+
+  const handleSelectOnlySuggestedSubjects = () => {
+    setSelectedCustomSubjectIds(suggestedSubjectIds);
   };
 
   // Helper: Find assignments for a specific cell (classId, subjectId)
@@ -2297,13 +2386,222 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
         {/* ----------------------------------------------------------------------- */}
         <main className="flex-1 flex flex-col bg-slate-100 overflow-hidden">
           {/* View Mode 1: Interactive Matrix (Theo Giáo viên) */}
-          {viewMode === 'TEACHER' && (
-            <div className="flex-1 overflow-auto p-3" style={{ zoom: `${zoomLevel}%` }}>
-              <div className="space-y-6">
+          {viewMode === 'TEACHER' && (() => {
+            const currentDept = propDepartments.find((d) => d.id === currentSelectedTeacher?.departmentId);
+            const suggestedSubjectsList = currentSelectedTeacher
+              ? propSubjects.filter((s) => {
+                  const { isSuggested } = isSubjectSuggestedForTeacher(
+                    s,
+                    currentSelectedTeacher,
+                    propDepartments,
+                    localAssignments,
+                    propTeachers
+                  );
+                  return isSuggested;
+                })
+              : propSubjects;
+
+            return (
+              <div className="flex-1 overflow-auto p-3 space-y-4" style={{ zoom: `${zoomLevel}%` }}>
+                {/* TOOLBAR: MÔN GỢI Ý & CHỌN MÔN ĐỂ PHÂN CÔNG */}
+                <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    {/* 1. Môn gợi ý (Tích chọn gọn gàng) */}
+                    <label className="flex items-center gap-2 cursor-pointer select-none bg-blue-50/90 hover:bg-blue-100 text-blue-950 px-3 py-1.5 rounded-xl border border-blue-200 transition shadow-2xs">
+                      <input
+                        type="checkbox"
+                        id="toggle-filter-suggested-subjects"
+                        checked={filterSuggestedSubjectsOnly}
+                        onChange={(e) => {
+                          setFilterSuggestedSubjectsOnly(e.target.checked);
+                          setSelectedCustomSubjectIds([]);
+                        }}
+                        className="w-4 h-4 rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
+                      />
+                      <Sparkles className="w-3.5 h-3.5 text-blue-700 animate-pulse" />
+                      <span className="text-xs font-black">Môn gợi ý</span>
+                    </label>
+
+                    {/* 2. Mục "Chọn môn" để tích chọn một hoặc nhiều môn hiển thị để phân công */}
+                    <div className="relative" ref={subjectDropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => setIsSubjectDropdownOpen(!isSubjectDropdownOpen)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer select-none ${
+                          selectedCustomSubjectIds.length > 0
+                            ? 'bg-indigo-50 border-indigo-300 text-indigo-950 hover:bg-indigo-100 ring-2 ring-indigo-400/30'
+                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <BookOpen className="w-3.5 h-3.5 text-indigo-700" />
+                        <span>
+                          Chọn môn{selectedCustomSubjectIds.length > 0 ? ` (${selectedCustomSubjectIds.length})` : ''}
+                        </span>
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
+                            isSubjectDropdownOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      {/* Dropdown Popover */}
+                      {isSubjectDropdownOpen && (
+                        <div className="absolute left-0 top-full mt-1.5 z-50 bg-white rounded-2xl shadow-xl border border-slate-200 w-80 sm:w-96 p-3 space-y-2.5 animate-in fade-in zoom-in-95">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Chọn môn hiển thị ({selectedCustomSubjectIds.length > 0 ? `${selectedCustomSubjectIds.length}/${propSubjects.length}` : 'Tất cả'})</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setIsSubjectDropdownOpen(false)}
+                              className="text-slate-400 hover:text-slate-600 p-0.5 rounded-lg cursor-pointer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="relative">
+                            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+                            <input
+                              type="text"
+                              placeholder="Tìm môn học theo tên, mã..."
+                              value={subjectFilterSearch}
+                              onChange={(e) => setSubjectFilterSearch(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                            <button
+                              type="button"
+                              onClick={handleSelectAllSubjects}
+                              className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+                            >
+                              Chọn tất cả
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSelectOnlySuggestedSubjects}
+                              className="text-[10px] font-bold px-2 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 transition cursor-pointer flex items-center gap-1"
+                            >
+                              <Sparkles className="w-2.5 h-2.5 text-blue-600" />
+                              <span>Chỉ môn gợi ý ({suggestedSubjectIds.length})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleClearSubjectFilter}
+                              className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-700 transition cursor-pointer ml-auto"
+                            >
+                              Bỏ chọn
+                            </button>
+                          </div>
+
+                          <div className="max-h-60 overflow-y-auto space-y-1 divide-y divide-slate-100/60 p-1">
+                            {filteredSubjectsForDropdown.map((subj) => {
+                              const isChecked = selectedCustomSubjectIds.length === 0
+                                ? (filterSuggestedSubjectsOnly && currentSelectedTeacher ? isSuggestedSubject(subj) : true)
+                                : selectedCustomSubjectIds.includes(subj.id);
+                              const isSuggested = isSuggestedSubject(subj);
+
+                              return (
+                                <label
+                                  key={subj.id}
+                                  className={`flex items-center justify-between gap-2 p-2 rounded-xl text-xs cursor-pointer select-none transition ${
+                                    isChecked ? 'bg-blue-50/70 text-slate-900 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleToggleCustomSubject(subj.id)}
+                                      className="w-4 h-4 rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
+                                    />
+                                    <span className="truncate">{subj.name}</span>
+                                    <span className="font-mono text-[10px] text-slate-400">({subj.code})</span>
+                                  </div>
+                                  {isSuggested && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200 flex-shrink-0">
+                                      Gợi ý
+                                    </span>
+                                  )}
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                            <span className="text-[10px] text-slate-500">
+                              {selectedCustomSubjectIds.length > 0
+                                ? `Đã chọn ${selectedCustomSubjectIds.length}/${propSubjects.length} môn`
+                                : 'Đang hiển thị theo mặc định'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setIsSubjectDropdownOpen(false)}
+                              className="px-3 py-1 bg-blue-800 hover:bg-blue-900 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs"
+                            >
+                              Đóng
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Chip hiển thị trạng thái lọc khi có chọn môn tùy biến */}
+                    {selectedCustomSubjectIds.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-xs bg-indigo-50 text-indigo-900 border border-indigo-200 px-3 py-1.5 rounded-xl font-medium">
+                        <span>Đang lọc <strong>{selectedCustomSubjectIds.length}</strong> môn</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCustomSubjectIds([])}
+                          className="ml-1 text-slate-400 hover:text-red-600 font-bold p-0.5 rounded cursor-pointer"
+                          title="Xóa lọc môn (Quay về theo cài đặt Môn gợi ý)"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs">
+                    {currentSelectedTeacher && (
+                      <span className="text-slate-600 text-[11px] hidden lg:inline">
+                        GV: <strong className="text-slate-900 font-bold">{currentSelectedTeacher.fullName}</strong>
+                        {currentSelectedTeacher.major && ` • CM: ${currentSelectedTeacher.major}`}
+                        {currentDept && ` • Tổ: ${currentDept.name}`}
+                      </span>
+                    )}
+                    {selectedCustomSubjectIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCustomSubjectIds([])}
+                        className="text-[11px] font-bold px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition cursor-pointer flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Đặt lại môn</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
                 {[6, 7, 8, 9].map((grade) => {
                   const gradeClasses = classesByGrade[grade] || [];
-                  const gradeSubjects = subjectsByGrade[grade] || [];
+                  const allGradeSubjects = subjectsByGrade[grade] || [];
                   if (gradeClasses.length === 0) return null;
+
+                  // Lọc môn hiển thị theo "Chọn môn" hoặc "Môn gợi ý"
+                  const gradeSubjects = allGradeSubjects.filter((subj) => {
+                    if (selectedCustomSubjectIds.length > 0) {
+                      return selectedCustomSubjectIds.includes(subj.id);
+                    }
+                    if (filterSuggestedSubjectsOnly && currentSelectedTeacher) {
+                      return isSuggestedSubject(subj);
+                    }
+                    return true;
+                  });
 
                   return (
                     <div
@@ -2317,19 +2615,55 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
                             K{grade}
                           </span>
                           <h3 className="font-bold text-slate-900 text-sm">
-                            Khối {grade} ({gradeClasses.length} lớp)
+                            Khối {grade} ({gradeClasses.length} lớp • {gradeSubjects.length}/{allGradeSubjects.length} môn)
                           </h3>
                         </div>
-                        <span className="text-xs text-slate-500">
-                          {gradeClasses.map((c) => c.name).join(', ')}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500 hidden sm:inline">
+                            {gradeClasses.map((c) => c.name).join(', ')}
+                          </span>
+                          {gradeSubjects.length < allGradeSubjects.length && (
+                            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                              Đã ẩn {allGradeSubjects.length - gradeSubjects.length} môn
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Matrix Table */}
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
+                      {/* Matrix Table or Empty State if no suggested subjects */}
+                      {gradeSubjects.length === 0 ? (
+                        <div className="p-6 text-center text-xs text-slate-500 bg-slate-50/50 rounded-xl m-3 border border-dashed border-slate-200 space-y-2">
+                          <Info className="w-5 h-5 mx-auto text-slate-400" />
+                          <p className="font-semibold text-slate-700">
+                            Không có môn học nào đang được chọn hiển thị cho Thầy/Cô {currentSelectedTeacher?.fullName} ở Khối {grade}.
+                          </p>
+                          <div className="flex items-center justify-center gap-2 pt-1">
+                            {selectedCustomSubjectIds.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setSelectedCustomSubjectIds([])}
+                                className="text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-white border border-indigo-200 px-3 py-1.5 rounded-lg shadow-2xs hover:bg-indigo-50 transition cursor-pointer"
+                              >
+                                Đặt lại bộ lọc môn
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFilterSuggestedSubjectsOnly(false);
+                                setSelectedCustomSubjectIds([]);
+                              }}
+                              className="text-xs font-bold text-blue-700 hover:text-blue-900 bg-white border border-blue-200 px-3 py-1.5 rounded-lg shadow-2xs hover:bg-blue-50 transition cursor-pointer"
+                            >
+                              Hiển thị toàn bộ {allGradeSubjects.length} môn của Khối {grade}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
                               <th className="p-2.5 min-w-[200px] sticky left-0 bg-slate-100 z-10 border-r border-slate-200 shadow-xs">
                                 Môn học (Khối {grade})
                               </th>
@@ -2374,8 +2708,15 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
                               });
                               const remainingInGrade = Math.max(0, totalNeeded - totalAssignedInGrade);
 
-                              // Highlight if matches selected teacher
-                              const isMatch = isSubjectMatchingTeacher(subj, currentSelectedTeacher);
+                              // Highlight & reasons if matches selected teacher
+                              const matchInfo = isSubjectSuggestedForTeacher(
+                                subj,
+                                currentSelectedTeacher,
+                                propDepartments,
+                                localAssignments,
+                                propTeachers
+                              );
+                              const isMatch = matchInfo.isSuggested;
 
                               return (
                                 <tr
@@ -2386,19 +2727,29 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
                                       : 'hover:bg-slate-50/80'
                                   }`}
                                 >
-                                  {/* Subject Header with Match Indicator */}
+                                  {/* Subject Header with Match Indicator & Reasons */}
                                   <td className="p-2.5 font-bold text-slate-900 sticky left-0 bg-white z-10 border-r border-slate-200 shadow-xs">
                                     <div className="flex items-center gap-1.5">
                                       {isMatch && (
                                         <span
                                           className="w-2 h-2 rounded-full bg-blue-600 animate-pulse flex-shrink-0"
-                                          title="Phù hợp chuyên môn giáo viên đang chọn"
+                                          title={matchInfo.reasons.join(' • ')}
                                         />
                                       )}
                                       <span className="truncate">{subj.name}</span>
                                     </div>
-                                    <div className="text-[10px] text-slate-400 font-normal">
-                                      {subj.group || 'Bộ môn'}
+                                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                      <span className="text-[10px] text-slate-400 font-normal">
+                                        {subj.group || 'Bộ môn'}
+                                      </span>
+                                      {matchInfo.reasons.length > 0 && (
+                                        <span
+                                          className="text-[9px] font-bold text-blue-800 bg-blue-50 border border-blue-200 px-1.5 py-0.2 rounded"
+                                          title={matchInfo.reasons.join(' • ')}
+                                        >
+                                          {matchInfo.reasons[0]}
+                                        </span>
+                                      )}
                                     </div>
                                   </td>
 
@@ -2576,12 +2927,13 @@ export const SmartAssignmentModule: React.FC<SmartAssignmentModuleProps> = ({
                           </tbody>
                         </table>
                       </div>
-                    </div>
-                  );
+                    )}
+                  </div>
+                );
                 })}
               </div>
             </div>
-          )}
+          )})()}
 
           {/* View Mode 2: Lớp - Môn (Class-Subject Dedicated View) */}
           {viewMode === 'CLASS_SUBJECT' && (

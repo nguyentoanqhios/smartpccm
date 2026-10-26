@@ -58,7 +58,7 @@ import { toastService } from '../services/toastService';
 import { validateProposedAssignment } from '../validation/assignmentValidator';
 import { SmartAssignmentModule } from './SmartAssignmentModule';
 import { TeachingPlanFrameworkModal } from './TeachingPlanFrameworkModal';
-import { getSmartTeacherSuggestions, TeacherSuggestion } from '../utils/teacherSuggestionEngine';
+import { getSmartTeacherSuggestions, TeacherSuggestion, isSubjectSuggestedForTeacher } from '../utils/teacherSuggestionEngine';
 import { matchesQuery } from '../utils/searchUtils';
 
 interface AssignmentTableViewProps {
@@ -204,6 +204,9 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
   const [teacherModalSearch, setTeacherModalSearch] = useState<string>('');
   const [formType, setFormType] = useState<'TEACHING' | 'CONCURRENT' | 'ACTIVITY' | 'EXEMPTION'>('TEACHING');
   const [formSubjectId, setFormSubjectId] = useState<string>('');
+  const [modalFilterSuggestedSubjectsOnly, setModalFilterSuggestedSubjectsOnly] = useState<boolean>(true);
+  const [modalSubjectSearch, setModalSubjectSearch] = useState<string>('');
+  const [modalClassGradeFilter, setModalClassGradeFilter] = useState<'ALL' | '6' | '7' | '8' | '9'>('ALL');
   const [formDutyId, setFormDutyId] = useState<string>('');
   const [formClassIds, setFormClassIds] = useState<string[]>([]);
   const [formSession, setFormSession] = useState<'MORNING' | 'AFTERNOON' | 'FULL_DAY' | 'TWO_SESSIONS_PER_DAY' | 'ACTIVITY'>('MORNING');
@@ -414,11 +417,162 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
     });
   }, [teachers, teacherModalSearch, modalTargetSubject, modalTargetClass, departments, assignments, calcMap]);
 
+  // Selected teacher object in modal
+  const currentFormTeacher = useMemo(() => {
+    return formTeacherId ? teacherMap.get(formTeacherId) : null;
+  }, [formTeacherId, teacherMap]);
+
+  // Suggested subjects calculation for the selected teacher in modal
+  const modalSubjectSuggestionsMap = useMemo(() => {
+    const map = new Map<string, { isSuggested: boolean; reasons: string[]; isPrimary: boolean }>();
+    if (!currentFormTeacher) {
+      uniqueSubjects.forEach((s) => map.set(s.id, { isSuggested: true, reasons: [], isPrimary: false }));
+      return map;
+    }
+    uniqueSubjects.forEach((s) => {
+      const res = isSubjectSuggestedForTeacher(
+        s,
+        currentFormTeacher,
+        departments,
+        assignments,
+        teachers
+      );
+      map.set(s.id, res);
+    });
+    return map;
+  }, [uniqueSubjects, currentFormTeacher, departments, assignments, teachers]);
+
+  // Available subjects for the modal, filtered by modalFilterSuggestedSubjectsOnly & modalSubjectSearch
+  const modalFilteredSubjects = useMemo(() => {
+    let list = uniqueSubjects;
+    if (modalSubjectSearch.trim()) {
+      list = list.filter((s) =>
+        matchesQuery(modalSubjectSearch, s.name, s.code, s.shortName)
+      );
+    }
+    if (modalFilterSuggestedSubjectsOnly && currentFormTeacher) {
+      const suggestedOnly = list.filter((s) => {
+        if (s.id === formSubjectId) return true; // Keep current subject visible
+        const info = modalSubjectSuggestionsMap.get(s.id);
+        return info?.isSuggested;
+      });
+      if (suggestedOnly.length > 0) {
+        list = suggestedOnly;
+      }
+    }
+    return [...list].sort((a, b) => {
+      const infoA = modalSubjectSuggestionsMap.get(a.id);
+      const infoB = modalSubjectSuggestionsMap.get(b.id);
+      if (infoA?.isPrimary && !infoB?.isPrimary) return -1;
+      if (!infoA?.isPrimary && infoB?.isPrimary) return 1;
+      if (infoA?.isSuggested && !infoB?.isSuggested) return -1;
+      if (!infoA?.isSuggested && infoB?.isSuggested) return 1;
+      return a.name.localeCompare(b.name, 'vi');
+    });
+  }, [uniqueSubjects, modalSubjectSearch, modalFilterSuggestedSubjectsOnly, currentFormTeacher, modalSubjectSuggestionsMap, formSubjectId]);
+
+  // Teacher Change Handler in Modal (auto-selects first suggested subject if current subject doesn't fit)
+  const handleTeacherChange = (teacherId: string) => {
+    setFormTeacherId(teacherId);
+    const newTeacher = teacherMap.get(teacherId);
+    if (newTeacher && formType === 'TEACHING' && modalFilterSuggestedSubjectsOnly) {
+      const currentSubj = formSubjectId ? subjectMap.get(formSubjectId) : null;
+      const isCurrentSuggested = currentSubj
+        ? isSubjectSuggestedForTeacher(currentSubj, newTeacher, departments, assignments, teachers).isSuggested
+        : false;
+      if (!isCurrentSuggested) {
+        const firstSuggested = uniqueSubjects.find((s) =>
+          isSubjectSuggestedForTeacher(s, newTeacher, departments, assignments, teachers).isSuggested
+        );
+        if (firstSuggested) {
+          handleSubjectChange(firstSuggested.id);
+        }
+      }
+    }
+  };
+
+  // Class Selection Batch Helpers in Modal
+  const handleSelectAllClassesInGrade = (grade: number) => {
+    const gradeClassIds = classes.filter((c) => !c.isDeleted && c.grade === grade).map((c) => c.id);
+    const set = new Set([...formClassIds, ...gradeClassIds]);
+    const newClassIds = Array.from(set);
+    setFormClassIds(newClassIds);
+    if (newClassIds.length > 0) {
+      const cls = classMap.get(newClassIds[0]);
+      if (cls) {
+        setFormSession(cls.session);
+        const curr = curriculums.find(
+          (c) => c.grade === cls.grade && (c.subjectId === formSubjectId || c.subjectId === subjectMap.get(formSubjectId)?.code)
+        );
+        if (curr) setFormPeriodsPerWeek(curr.periodsPerWeek);
+      }
+    }
+  };
+
+  const handleDeselectAllClassesInGrade = (grade: number) => {
+    const gradeClassIds = new Set(classes.filter((c) => !c.isDeleted && c.grade === grade).map((c) => c.id));
+    const newClassIds = formClassIds.filter((id) => !gradeClassIds.has(id));
+    setFormClassIds(newClassIds);
+  };
+
+  const handleClearAllClasses = () => {
+    setFormClassIds([]);
+  };
+
+  const handleSelectAllClasses = () => {
+    const all = classes.filter((c) => !c.isDeleted).map((c) => c.id);
+    setFormClassIds(all);
+  };
+
+  // Live Workload Impact Preview for Modal
+  const modalWorkloadPreview = useMemo(() => {
+    if (!formTeacherId) return null;
+    const t = teacherMap.get(formTeacherId);
+    if (!t) return null;
+
+    const calc = calcMap.get(formTeacherId);
+    const quota = calc?.quota ?? t.standardQuota ?? 19;
+    const currentPeriods = calc?.totalCalculated ?? 0;
+    const currentDiff = calc?.difference ?? (currentPeriods - quota);
+
+    let addedPeriods = 0;
+    if (formType === 'TEACHING') {
+      const count = formClassIds.length > 0 ? formClassIds.length : (formIsInterSchool ? 1 : 0);
+      addedPeriods = count * formPeriodsPerWeek;
+    } else {
+      addedPeriods = formPeriodsPerWeek;
+    }
+
+    let netAdded = addedPeriods;
+    if (editingAssignment && editingAssignment.teacherId === formTeacherId) {
+      const origPeriods = editingAssignment.periodsPerWeek || 0;
+      netAdded = addedPeriods - origPeriods;
+    }
+
+    const projectedPeriods = currentPeriods + netAdded;
+    const projectedDiff = projectedPeriods - quota;
+
+    return {
+      teacher: t,
+      currentPeriods,
+      quota,
+      currentDiff,
+      addedPeriods,
+      netAdded,
+      projectedPeriods,
+      projectedDiff,
+      classCount: formClassIds.length,
+    };
+  }, [formTeacherId, teacherMap, calcMap, formType, formClassIds.length, formPeriodsPerWeek, formIsInterSchool, editingAssignment]);
+
   // Open Modal for New Assignment
   const handleOpenAddModal = () => {
     if (isLocked) return;
     setEditingAssignment(null);
     setTeacherModalSearch('');
+    setModalSubjectSearch('');
+    setModalFilterSuggestedSubjectsOnly(true);
+    setModalClassGradeFilter('ALL');
     setFormType('TEACHING');
     const defaultSubject = subjects[0];
     setFormSubjectId(defaultSubject?.id || '');
@@ -456,6 +610,9 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
     if (isLocked) return;
     setEditingAssignment(assignment);
     setTeacherModalSearch('');
+    setModalSubjectSearch('');
+    setModalFilterSuggestedSubjectsOnly(false); // Display all subjects so existing assignment subject isn't hidden
+    setModalClassGradeFilter('ALL');
     setFormTeacherId(assignment.teacherId);
     setFormType(assignment.type);
     setFormSubjectId(assignment.subjectId || '');
@@ -476,6 +633,9 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
     if (isLocked) return;
     setEditingAssignment(null); // Not editing, creating new assignment
     setTeacherModalSearch('');
+    setModalSubjectSearch('');
+    setModalFilterSuggestedSubjectsOnly(true);
+    setModalClassGradeFilter('ALL');
     setFormTeacherId(assignment.teacherId);
     setFormType(assignment.type);
     setFormSubjectId(assignment.subjectId || '');
@@ -2456,178 +2616,101 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
         )}
       </div>
 
-      {/* ADD / EDIT ASSIGNMENT MODAL */}
+      {/* ADD / EDIT ASSIGNMENT MODAL - EXPANDED & OPTIMIZED */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Plus className="w-5 h-5 text-blue-700" />
-                {editingAssignment ? 'Cập nhật phân công' : 'Thêm phân công chuyên môn'}
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-5xl w-full p-5 sm:p-7 space-y-4 my-auto max-h-[94vh] flex flex-col animate-in fade-in zoom-in-95 border border-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center shadow-2xs">
+                  <Plus className="w-5 h-5 text-blue-700" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    {editingAssignment ? 'Cập nhật phân công chuyên môn' : 'Thêm phân công chuyên môn'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Năm học: <strong className="text-slate-700">{schoolYearId}</strong> • Học kỳ:{' '}
+                    <strong className="text-slate-700">{semesterId}</strong> • Phiên bản:{' '}
+                    <strong className="text-blue-700">{currentVersion?.versionName || versionId}</strong>
+                  </p>
+                </div>
+              </div>
 
-            <form onSubmit={handleSave} className="space-y-4 text-xs">
-              {/* Quick switch to Smart Assignment Matrix if adding new */}
-              {!editingAssignment && (
-                <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between gap-2 shadow-2xs">
-                  <div className="flex items-center gap-2 text-xs text-indigo-950 font-medium">
-                    <Sparkles className="w-4 h-4 text-indigo-700 flex-shrink-0 animate-pulse" />
-                    <span>Phân công hàng loạt bằng ma trận tích chọn & AI?</span>
-                  </div>
+              <div className="flex items-center gap-2">
+                {!editingAssignment && (
                   <button
                     type="button"
                     onClick={() => {
                       setIsModalOpen(false);
                       setIsSmartAssignmentOpen(true);
                     }}
-                    className="px-2.5 py-1 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-bold whitespace-nowrap shadow-xs cursor-pointer transition flex items-center gap-1"
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 hover:border-purple-300 text-indigo-950 rounded-xl text-xs font-bold transition shadow-2xs cursor-pointer"
                   >
-                    <span>Mở Ma trận</span>
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 animate-pulse" />
+                    <span>Mở Ma trận phân công thông minh</span>
                   </button>
-                </div>
-              )}
+                )}
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                  title="Đóng (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
 
+            <form onSubmit={handleSave} className="flex-1 overflow-y-auto space-y-4 text-xs pr-1">
               {/* Validation Alert Box if Conflict Detected */}
               {validationWarning && (
-                <div className="bg-amber-50 border border-amber-300 text-amber-900 p-3 rounded-xl flex items-start gap-2">
+                <div className="bg-amber-50 border border-amber-300 text-amber-900 p-3 rounded-2xl flex items-start gap-2.5 shadow-2xs">
                   <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <div className="font-bold">Cảnh báo trùng lặp / lệch khung</div>
-                    <div className="text-[11px] mt-0.5">{validationWarning}</div>
+                    <div className="font-bold">Cảnh báo trùng lặp / lệch khung phân công</div>
+                    <div className="text-[11px] mt-0.5 text-amber-800">{validationWarning}</div>
                   </div>
                 </div>
               )}
 
-              {/* Smart Teacher Suggestions based on Subject & Department */}
-              {formType === 'TEACHING' && modalSmartTeacherSuggestions.length > 0 && (
-                <div className="bg-gradient-to-br from-blue-50/80 via-indigo-50/40 to-white border border-blue-200/90 rounded-2xl p-3.5 space-y-2.5 shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-blue-950">
-                      <Sparkles className="w-4 h-4 text-blue-700 animate-pulse flex-shrink-0" />
-                      <span>Gợi ý giáo viên phù hợp nhất ({modalTargetSubject?.name || 'Môn học'})</span>
+              {/* 2-COLUMN RESPONSIVE LAYOUT */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                {/* ================= LEFT COLUMN: TEACHER & SUBJECT (col-span-6) ================= */}
+                <div className="lg:col-span-6 space-y-4">
+                  {/* 1. Teacher Selector with Search & Recommendations */}
+                  <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/90 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="block font-bold text-slate-900 text-xs">Giáo viên được phân công *</label>
+                      {currentFormTeacher && (
+                        <span className="text-[10px] text-blue-900 font-bold bg-blue-100/80 px-2 py-0.5 rounded-md border border-blue-200">
+                          Định mức: {calcMap.get(formTeacherId)?.quota ?? currentFormTeacher.standardQuota ?? 19}t/tuần • {currentFormTeacher.workplace || 'Điểm chính'}
+                        </span>
+                      )}
                     </div>
-                    <span className="text-[10px] font-bold text-blue-800 bg-blue-100/90 px-2 py-0.5 rounded-full border border-blue-200">
-                      Ưu tiên chưa đủ định mức
-                    </span>
-                  </div>
 
-                  <p className="text-[11px] text-slate-500">
-                    Thuật toán tự động đối chiếu môn & tổ chuyên môn, sắp xếp ưu tiên giáo viên còn thiếu nhiều tiết nhất lên đầu:
-                  </p>
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Tìm giáo viên theo tên, mã, chuyên môn..."
+                        value={teacherModalSearch}
+                        onChange={(e) => setTeacherModalSearch(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 transition shadow-2xs"
+                      />
+                    </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {modalSmartTeacherSuggestions.slice(0, 4).map((sugg) => {
-                      const isSelected = formTeacherId === sugg.teacher.id;
-                      return (
-                        <button
-                          key={sugg.teacher.id}
-                          type="button"
-                          onClick={() => setFormTeacherId(sugg.teacher.id)}
-                          className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
-                            isSelected
-                              ? 'bg-blue-700 text-white border-blue-700 shadow-sm ring-2 ring-blue-400/40'
-                              : 'bg-white hover:bg-blue-50/70 text-slate-800 border-slate-200 hover:border-blue-300'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-1">
-                            <div>
-                              <div className={`font-bold text-xs flex items-center gap-1 ${isSelected ? 'text-white' : 'text-slate-900'}`}>
-                                <span>{sugg.teacher.fullName}</span>
-                                <span className={`text-[10px] font-mono px-1 py-0.2 rounded ${isSelected ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                                  {sugg.teacher.code}
-                                </span>
-                              </div>
-                              <div className={`text-[11px] mt-0.5 ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
-                                {sugg.department?.name || 'Tổ bộ môn'} • {sugg.teacher.workplace || 'Điểm chính'}
-                              </div>
-                            </div>
-                            {isSelected && <CheckCircle2 className="w-4 h-4 text-white flex-shrink-0" />}
-                          </div>
-
-                          <div className="mt-2 flex items-center justify-between gap-1 pt-1 border-t border-slate-100/20">
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                                isSelected
-                                  ? 'bg-white/20 text-white'
-                                  : sugg.isUnderQuota
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                                  : sugg.difference === 0
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {sugg.isUnderQuota
-                                ? `Thiếu ${sugg.deficit}t (${sugg.currentPeriods}/${sugg.quota}t)`
-                                : sugg.difference === 0
-                                ? `Đủ định mức (${sugg.quota}t)`
-                                : `Vượt +${sugg.difference}t`}
-                            </span>
-                            <span className={`text-[10px] font-bold ${isSelected ? 'text-white underline' : 'text-blue-700'}`}>
-                              {isSelected ? '✓ Đang chọn' : '+ Chọn GV này'}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* 1. Teacher Selector with Search */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="block font-semibold text-slate-700">Giáo viên được phân công *</label>
-                  {formTeacherId && teacherMap.get(formTeacherId) && (
-                    <span className="text-xs text-blue-800 font-bold bg-blue-50 px-2.5 py-0.5 rounded-md border border-blue-200">
-                      Định mức: {calcMap.get(formTeacherId)?.quota ?? teacherMap.get(formTeacherId)?.standardQuota ?? 19} tiết/tuần • {teacherMap.get(formTeacherId)?.workplace || 'Điểm chính'}
-                    </span>
-                  )}
-                </div>
-
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Tìm nhanh giáo viên theo tên, mã hoặc nơi làm việc..."
-                    value={teacherModalSearch}
-                    onChange={(e) => setTeacherModalSearch(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 transition"
-                  />
-                </div>
-
-                <select
-                  id="modal-teacher-select"
-                  value={formTeacherId}
-                  onChange={(e) => setFormTeacherId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600 text-xs sm:text-sm cursor-pointer"
-                  required
-                >
-                  {modalFilteredTeachers.length === 0 ? (
-                    <option value="" disabled>Không tìm thấy giáo viên phù hợp</option>
-                  ) : (
-                    <>
-                      {/* Top Under-Quota / Matching suggestions optgroup */}
-                      {modalSmartTeacherSuggestions
-                        .filter(
-                          (s) =>
-                            s.isUnderQuota &&
-                            (!teacherModalSearch.trim() ||
-                              matchesQuery(
-                                teacherModalSearch,
-                                s.teacher.fullName,
-                                s.teacher.code,
-                                s.teacher.major,
-                                ...(s.teacher.subjectsCanTeach || [])
-                              ))
-                        ).length > 0 && (
-                        <optgroup label="⭐ Gợi ý ưu tiên (Đúng môn, cùng tổ & Chưa đủ định mức)">
+                    <select
+                      id="modal-teacher-select"
+                      value={formTeacherId}
+                      onChange={(e) => handleTeacherChange(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600 text-xs sm:text-sm cursor-pointer shadow-2xs"
+                      required
+                    >
+                      {modalFilteredTeachers.length === 0 ? (
+                        <option value="" disabled>Không tìm thấy giáo viên phù hợp</option>
+                      ) : (
+                        <>
                           {modalSmartTeacherSuggestions
                             .filter(
                               (s) =>
@@ -2640,230 +2723,555 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                                     s.teacher.major,
                                     ...(s.teacher.subjectsCanTeach || [])
                                   ))
-                            )
-                            .map((s) => {
-                              const dept = deptMap.get(s.teacher.departmentId);
+                            ).length > 0 && (
+                            <optgroup label="⭐ Gợi ý ưu tiên (Đúng môn, cùng tổ & Chưa đủ định mức)">
+                              {modalSmartTeacherSuggestions
+                                .filter(
+                                  (s) =>
+                                    s.isUnderQuota &&
+                                    (!teacherModalSearch.trim() ||
+                                      matchesQuery(
+                                        teacherModalSearch,
+                                        s.teacher.fullName,
+                                        s.teacher.code,
+                                        s.teacher.major,
+                                        ...(s.teacher.subjectsCanTeach || [])
+                                      ))
+                                )
+                                .map((s) => {
+                                  const dept = deptMap.get(s.teacher.departmentId);
+                                  return (
+                                    <option key={`opt-sugg-${s.teacher.id}`} value={s.teacher.id}>
+                                      ⭐ {s.teacher.fullName} ({s.teacher.code}) – {dept ? (dept.fullName || dept.name) : 'Tổ CM'} – Hiện dạy: {s.currentPeriods}/{s.quota}t (Thiếu {s.deficit}t)
+                                    </option>
+                                  );
+                                })}
+                            </optgroup>
+                          )}
+                          <optgroup label="Tất cả giáo viên">
+                            {modalFilteredTeachers.map((t) => {
+                              const dept = deptMap.get(t.departmentId);
+                              const calc = calcMap.get(t.id);
+                              const currentPeriods = calc?.totalCalculated ?? 0;
+                              const quota = calc?.quota ?? t.standardQuota ?? 19;
+                              const diff = calc ? calc.difference : (currentPeriods - quota);
+                              const diffStr = diff < 0 ? `thiếu ${Math.abs(diff)}t` : diff > 0 ? `vượt +${diff}t` : 'đủ';
                               return (
-                                <option key={`opt-sugg-${s.teacher.id}`} value={s.teacher.id}>
-                                  ⭐ {s.teacher.fullName} ({s.teacher.code}) – {dept ? (dept.fullName || dept.name) : 'Tổ CM'} – Hiện dạy: {s.currentPeriods}/{s.quota}t (Thiếu {s.deficit}t)
+                                <option key={t.id} value={t.id}>
+                                  {t.fullName} ({t.code}) – {dept ? (dept.fullName || dept.name) : 'Tổ CM'} – {currentPeriods}/{quota}t ({diffStr}) – {t.workplace || 'Điểm chính'}
                                 </option>
                               );
                             })}
-                        </optgroup>
+                          </optgroup>
+                        </>
                       )}
-                      <optgroup label="Tất cả giáo viên">
-                        {modalFilteredTeachers.map((t) => {
-                          const dept = deptMap.get(t.departmentId);
-                          const calc = calcMap.get(t.id);
-                          const currentPeriods = calc?.totalCalculated ?? 0;
-                          const quota = calc?.quota ?? t.standardQuota ?? 19;
-                          const diff = calc ? calc.difference : (currentPeriods - quota);
-                          const diffStr = diff < 0 ? `thiếu ${Math.abs(diff)}t` : diff > 0 ? `vượt +${diff}t` : 'đủ';
+                    </select>
+
+                    {/* Quick recommended teacher cards */}
+                    {formType === 'TEACHING' && modalSmartTeacherSuggestions.length > 0 && (
+                      <div className="pt-1">
+                        <div className="text-[10px] font-bold text-slate-500 mb-1 flex items-center justify-between">
+                          <span className="flex items-center gap-1 text-blue-900">
+                            <Sparkles className="w-3 h-3 text-blue-600" />
+                            Gợi ý giáo viên phù hợp ({modalTargetSubject?.name || 'Môn'}):
+                          </span>
+                          <span className="text-slate-400">1 chạm để chọn</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {modalSmartTeacherSuggestions.slice(0, 4).map((sugg) => {
+                            const isSelected = formTeacherId === sugg.teacher.id;
+                            return (
+                              <button
+                                key={sugg.teacher.id}
+                                type="button"
+                                onClick={() => handleTeacherChange(sugg.teacher.id)}
+                                className={`p-2 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                                  isSelected
+                                    ? 'bg-blue-800 text-white border-blue-900 shadow-xs'
+                                    : 'bg-white hover:bg-blue-50 text-slate-800 border-slate-200'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className={`font-bold text-xs truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
+                                    {sugg.teacher.fullName}
+                                  </span>
+                                  {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-white flex-shrink-0" />}
+                                </div>
+                                <div className="flex items-center justify-between text-[10px] mt-1 pt-1 border-t border-slate-100/20">
+                                  <span className={isSelected ? 'text-blue-100' : 'text-slate-500'}>
+                                    {sugg.teacher.code}
+                                  </span>
+                                  <span
+                                    className={`font-bold px-1.5 py-0.2 rounded ${
+                                      isSelected
+                                        ? 'bg-white/20 text-white'
+                                        : sugg.isUnderQuota
+                                        ? 'bg-amber-100 text-amber-900'
+                                        : 'bg-emerald-100 text-emerald-800'
+                                    }`}
+                                  >
+                                    {sugg.isUnderQuota ? `Thiếu ${sugg.deficit}t` : 'Đủ định mức'}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Type Selector */}
+                  <div className="space-y-1.5">
+                    <label className="block font-bold text-slate-800 text-xs">Loại hình nhiệm vụ *</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormType('TEACHING')}
+                        className={`py-2 text-center rounded-xl font-bold transition text-xs cursor-pointer ${
+                          formType === 'TEACHING'
+                            ? 'bg-blue-900 text-white shadow-xs ring-2 ring-blue-500/30'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Giảng dạy môn
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormType('CONCURRENT')}
+                        className={`py-2 text-center rounded-xl font-bold transition text-xs cursor-pointer ${
+                          formType === 'CONCURRENT'
+                            ? 'bg-blue-900 text-white shadow-xs ring-2 ring-blue-500/30'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Kiêm nhiệm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormType('ACTIVITY')}
+                        className={`py-2 text-center rounded-xl font-bold transition text-xs cursor-pointer ${
+                          formType === 'ACTIVITY'
+                            ? 'bg-blue-900 text-white shadow-xs ring-2 ring-blue-500/30'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Hoạt động / Khác
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. Subject Selector with "Môn gợi ý" Toggle & Search */}
+                  {formType === 'TEACHING' || formType === 'ACTIVITY' ? (
+                    <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/90 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <label className="block font-bold text-slate-900 text-xs">Môn học *</label>
+                        {/* TÍCH CHỌN "MÔN GỢI Ý" THEO CHUYÊN MÔN & TỔ */}
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-blue-900 bg-blue-100/80 hover:bg-blue-200/80 px-2.5 py-1 rounded-xl border border-blue-300 transition select-none shadow-2xs">
+                          <input
+                            type="checkbox"
+                            id="modal-toggle-filter-suggested-subjects"
+                            checked={modalFilterSuggestedSubjectsOnly}
+                            onChange={(e) => setModalFilterSuggestedSubjectsOnly(e.target.checked)}
+                            className="w-3.5 h-3.5 rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <Sparkles className="w-3 h-3 text-blue-700 animate-pulse" />
+                          <span>Môn gợi ý</span>
+                        </label>
+                      </div>
+
+                      {/* Subject Search */}
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Tìm nhanh môn học theo tên, mã..."
+                          value={modalSubjectSearch}
+                          onChange={(e) => setModalSubjectSearch(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 transition shadow-2xs"
+                        />
+                      </div>
+
+                      <select
+                        id="modal-subject-select"
+                        value={formSubjectId}
+                        onChange={(e) => handleSubjectChange(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-semibold focus:ring-2 focus:ring-blue-600 text-xs sm:text-sm cursor-pointer shadow-2xs"
+                        required
+                      >
+                        {modalFilteredSubjects.length === 0 ? (
+                          <option value="" disabled>Không tìm thấy môn học phù hợp</option>
+                        ) : (
+                          <>
+                            {/* Suggested subjects optgroup */}
+                            {modalFilteredSubjects.some((s) => modalSubjectSuggestionsMap.get(s.id)?.isSuggested) && (
+                              <optgroup label="⭐ Môn gợi ý phù hợp (Chuyên môn, môn có thể dạy & cùng tổ)">
+                                {modalFilteredSubjects
+                                  .filter((s) => modalSubjectSuggestionsMap.get(s.id)?.isSuggested)
+                                  .map((s) => {
+                                    const info = modalSubjectSuggestionsMap.get(s.id);
+                                    const reasonStr = info?.reasons && info.reasons.length > 0 ? ` [${info.reasons.join(', ')}]` : '';
+                                    return (
+                                      <option key={`modal-sugg-sub-${s.id}`} value={s.id}>
+                                        ⭐ {s.name} ({s.code}){reasonStr} {s.isIntegrated ? '– Tích hợp' : ''}
+                                      </option>
+                                    );
+                                  })}
+                              </optgroup>
+                            )}
+                            {/* Other subjects optgroup if not filtering or if matches search */}
+                            {modalFilteredSubjects.some((s) => !modalSubjectSuggestionsMap.get(s.id)?.isSuggested) && (
+                              <optgroup label="Các môn học khác">
+                                {modalFilteredSubjects
+                                  .filter((s) => !modalSubjectSuggestionsMap.get(s.id)?.isSuggested)
+                                  .map((s) => (
+                                    <option key={`modal-other-sub-${s.id}`} value={s.id}>
+                                      {s.name} ({s.code}) {s.isIntegrated ? '– Tích hợp' : ''}
+                                    </option>
+                                  ))}
+                              </optgroup>
+                            )}
+                          </>
+                        )}
+                      </select>
+
+                      {/* Current selected subject info badge */}
+                      {formSubjectId && subjectMap.get(formSubjectId) && (() => {
+                        const subj = subjectMap.get(formSubjectId)!;
+                        const info = modalSubjectSuggestionsMap.get(subj.id);
+                        return (
+                          <div className="flex items-center justify-between text-[11px] pt-1 text-slate-600">
+                            <span className="flex items-center gap-1.5 flex-wrap">
+                              {info?.isSuggested ? (
+                                <span className="font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>{info.reasons.join(' • ') || 'Môn phù hợp'}</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic">Môn ngoài danh mục gợi ý</span>
+                              )}
+                            </span>
+                            <span className="text-slate-500">
+                              Đang hiện: <strong>{modalFilteredSubjects.length}</strong>/{uniqueSubjects.length} môn
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Nhiệm vụ kiêm nhiệm *</label>
+                      <select
+                        id="modal-duty-select"
+                        value={formDutyId}
+                        onChange={(e) => {
+                          setFormDutyId(e.target.value);
+                          const d = dutyMap.get(e.target.value);
+                          if (d) setFormPeriodsPerWeek(d.periodsPerWeekCalculated || 4);
+                        }}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600"
+                        required
+                      >
+                        <option value="">-- Chọn nhiệm vụ kiêm nhiệm --</option>
+                        {duties.filter((d) => d.type === 'CONCURRENT').map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name} (+{d.periodsPerWeekCalculated} tiết/tuần)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* 4. Inter-school teaching toggle */}
+                  <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 font-bold text-purple-950 text-xs cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={formIsInterSchool}
+                          onChange={(e) => setFormIsInterSchool(e.target.checked)}
+                          className="w-4 h-4 rounded text-purple-700 focus:ring-purple-500 cursor-pointer"
+                        />
+                        <span>Dạy liên trường (tiết dạy tại trường khác / biệt phái)</span>
+                      </label>
+                      {formIsInterSchool && (
+                        <span className="text-[10px] bg-purple-200 text-purple-900 font-bold px-2 py-0.5 rounded-full">
+                          Tổng hợp vào định mức
+                        </span>
+                      )}
+                    </div>
+                    {formIsInterSchool && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 animate-in fade-in">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-purple-900 mb-0.5">Tên trường liên trường *</label>
+                          <input
+                            type="text"
+                            value={formInterSchoolName}
+                            onChange={(e) => setFormInterSchoolName(e.target.value)}
+                            placeholder="VD: THCS Châu Quang, THCS Châu Đình..."
+                            className="w-full bg-white border border-purple-300 rounded-lg px-2.5 py-1.5 text-xs text-purple-950 font-medium focus:ring-2 focus:ring-purple-500"
+                            required={formIsInterSchool}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-purple-900 mb-0.5">Ghi chú lớp liên trường</label>
+                          <input
+                            type="text"
+                            value={formNotes}
+                            onChange={(e) => setFormNotes(e.target.value)}
+                            placeholder="VD: 2 lớp Mĩ thuật liên trường..."
+                            className="w-full bg-white border border-purple-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ================= RIGHT COLUMN: CLASS & WORKLOAD PREVIEW (col-span-6) ================= */}
+                <div className="lg:col-span-6 space-y-4 flex flex-col justify-between">
+                  {/* 5. Class Selection with Grade Tabs & 1-Click Batch Selection */}
+                  <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/90 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <label className="block font-bold text-slate-900 text-xs">
+                        Lớp học được gán {formType === 'TEACHING' ? '(Chọn nhiều lớp để tách dòng tự động)' : '(Tùy chọn)'}
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleSelectAllClasses}
+                          className="text-[10px] font-bold text-blue-700 hover:underline px-1 py-0.5 cursor-pointer"
+                        >
+                          Chọn hết
+                        </button>
+                        <span className="text-slate-300">•</span>
+                        <button
+                          type="button"
+                          onClick={handleClearAllClasses}
+                          className="text-[10px] font-bold text-slate-500 hover:text-red-600 px-1 py-0.5 cursor-pointer"
+                        >
+                          Bỏ chọn tất cả
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Grade Quick Filter Tabs */}
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                      {(['ALL', '6', '7', '8', '9'] as const).map((grade) => {
+                        const isCurrent = modalClassGradeFilter === grade;
+                        const label = grade === 'ALL' ? 'Tất cả các khối' : `Khối ${grade}`;
+                        return (
+                          <button
+                            key={grade}
+                            type="button"
+                            onClick={() => setModalClassGradeFilter(grade)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap cursor-pointer ${
+                              isCurrent
+                                ? 'bg-blue-800 text-white shadow-2xs'
+                                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* 1-Click Batch Select by Grade */}
+                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                      <span className="text-[10px] font-semibold text-slate-500">Thao tác nhanh:</span>
+                      {[6, 7, 8, 9].map((g) => {
+                        const gradeClasses = classes.filter((c) => !c.isDeleted && c.grade === g);
+                        if (gradeClasses.length === 0) return null;
+                        const allSelected = gradeClasses.every((c) => formClassIds.includes(c.id));
+                        return (
+                          <button
+                            key={`batch-g-${g}`}
+                            type="button"
+                            onClick={() => {
+                              if (allSelected) {
+                                handleDeselectAllClassesInGrade(g);
+                              } else {
+                                handleSelectAllClassesInGrade(g);
+                              }
+                            }}
+                            className={`text-[10px] font-bold px-2 py-0.8 rounded-md border transition cursor-pointer ${
+                              allSelected
+                                ? 'bg-blue-100 text-blue-900 border-blue-300'
+                                : 'bg-white hover:bg-blue-50 text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            {allSelected ? `✓ Đã chọn cả K${g}` : `+ Chọn cả K${g}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Classes Grid */}
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                      {classes
+                        .filter((c) => !c.isDeleted)
+                        .filter((c) => (modalClassGradeFilter === 'ALL' ? true : c.grade === parseInt(modalClassGradeFilter, 10)))
+                        .map((c) => {
+                          const isSelected = formClassIds.includes(c.id);
                           return (
-                            <option key={t.id} value={t.id}>
-                              {t.fullName} ({t.code}) – {dept ? (dept.fullName || dept.name) : 'Tổ CM'} – {currentPeriods}/{quota}t ({diffStr}) – {t.workplace || 'Điểm chính'}
-                            </option>
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => handleToggleClass(c.id)}
+                              className={`py-2 px-2 rounded-xl text-center font-bold text-xs transition border flex flex-col items-center justify-center gap-0.5 cursor-pointer ${
+                                isSelected
+                                  ? 'bg-blue-800 text-white border-blue-900 shadow-xs ring-1 ring-blue-400'
+                                  : 'bg-slate-50/70 text-slate-700 border-slate-200 hover:bg-blue-50/60 hover:border-blue-300'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1">
+                                <span>{c.name}</span>
+                                {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                              </div>
+                              <span className={`text-[9px] font-medium px-1 rounded ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-200/80 text-slate-500'}`}>
+                                {c.session === 'MORNING' ? 'Sáng' : c.session === 'AFTERNOON' ? 'Chiều' : 'Cả ngày'}
+                              </span>
+                            </button>
                           );
                         })}
-                      </optgroup>
-                    </>
-                  )}
-                </select>
-              </div>
+                    </div>
 
-              {/* 2. Type Selector */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Loại hình nhiệm vụ *</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormType('TEACHING')}
-                    className={`py-2 text-center rounded-xl font-bold transition ${
-                      formType === 'TEACHING'
-                        ? 'bg-blue-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    Giảng dạy môn
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormType('CONCURRENT')}
-                    className={`py-2 text-center rounded-xl font-bold transition ${
-                      formType === 'CONCURRENT'
-                        ? 'bg-blue-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    Kiêm nhiệm
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormType('ACTIVITY')}
-                    className={`py-2 text-center rounded-xl font-bold transition ${
-                      formType === 'ACTIVITY'
-                        ? 'bg-blue-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    Hoạt động / Khác
-                  </button>
-                </div>
-              </div>
+                    {/* Selected Summary */}
+                    <div className="flex items-center justify-between text-[11px] text-slate-600 pt-0.5">
+                      <span>
+                        Đã chọn:{' '}
+                        <strong className="text-blue-900 font-bold">
+                          {formClassIds.length} lớp
+                        </strong>
+                        {formClassIds.length > 0 && (
+                          <span className="text-slate-500">
+                            {' '}
+                            ({formClassIds.map((id) => classMap.get(id)?.name).filter(Boolean).join(', ')})
+                          </span>
+                        )}
+                      </span>
+                      {formClassIds.length > 0 && (
+                        <span className="font-bold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                          {formClassIds.length} lớp × {formPeriodsPerWeek}t = {formClassIds.length * formPeriodsPerWeek} tiết/tuần
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-              {/* 3. Subject / Duty selector based on Type */}
-              {formType === 'TEACHING' || formType === 'ACTIVITY' ? (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Môn học *</label>
-                  <select
-                    id="modal-subject-select"
-                    value={formSubjectId}
-                    onChange={(e) => handleSubjectChange(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600"
-                    required
-                  >
-                    {uniqueSubjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.code}) {s.isIntegrated ? '– Môn tích hợp' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Nhiệm vụ kiêm nhiệm *</label>
-                  <select
-                    id="modal-duty-select"
-                    value={formDutyId}
-                    onChange={(e) => {
-                      setFormDutyId(e.target.value);
-                      const d = dutyMap.get(e.target.value);
-                      if (d) setFormPeriodsPerWeek(d.periodsPerWeekCalculated || 4);
-                    }}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600"
-                    required
-                  >
-                    <option value="">-- Chọn nhiệm vụ kiêm nhiệm --</option>
-                    {duties.filter((d) => d.type === 'CONCURRENT').map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} (+{d.periodsPerWeekCalculated} tiết/tuần)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Inter-school teaching toggle */}
-              <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="flex items-center gap-2 font-bold text-purple-950 text-xs cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={formIsInterSchool}
-                      onChange={(e) => setFormIsInterSchool(e.target.checked)}
-                      className="w-4 h-4 rounded text-purple-700 focus:ring-purple-500 cursor-pointer"
-                    />
-                    <span>Dạy liên trường (tiết dạy tại trường khác / biệt phái)</span>
-                  </label>
-                  {formIsInterSchool && (
-                    <span className="text-[10px] bg-purple-200 text-purple-900 font-bold px-2 py-0.5 rounded-full">
-                      Tổng hợp vào định mức
-                    </span>
-                  )}
-                </div>
-                {formIsInterSchool && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 animate-in fade-in">
+                  {/* 6. Periods per week & Session & Weeks */}
+                  <div className="grid grid-cols-3 gap-2.5">
                     <div>
-                      <label className="block text-[11px] font-semibold text-purple-900 mb-0.5">Tên trường liên trường *</label>
+                      <label className="block font-bold text-slate-800 text-[11px] mb-1">Số tiết/tuần *</label>
                       <input
-                        type="text"
-                        value={formInterSchoolName}
-                        onChange={(e) => setFormInterSchoolName(e.target.value)}
-                        placeholder="VD: THCS Châu Quang, THCS Châu Đình..."
-                        className="w-full bg-white border border-purple-300 rounded-lg px-2.5 py-1.5 text-xs text-purple-950 font-medium focus:ring-2 focus:ring-purple-500"
-                        required={formIsInterSchool}
+                        id="modal-periods-input"
+                        type="number"
+                        min="1"
+                        max="30"
+                        value={formPeriodsPerWeek}
+                        onChange={(e) => setFormPeriodsPerWeek(parseInt(e.target.value, 10) || 1)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-black text-center text-sm focus:ring-2 focus:ring-blue-600 shadow-2xs"
+                        required
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-purple-900 mb-0.5">Ghi chú lớp liên trường</label>
+                      <label className="block font-bold text-slate-800 text-[11px] mb-1">Buổi dạy</label>
+                      <select
+                        value={formSession}
+                        onChange={(e) => setFormSession(e.target.value as any)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600 text-xs shadow-2xs cursor-pointer"
+                      >
+                        <option value="MORNING">Buổi sáng</option>
+                        <option value="AFTERNOON">Buổi chiều</option>
+                        <option value="FULL_DAY">2 buổi/ngày</option>
+                        <option value="ACTIVITY">Hoạt động</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-800 text-[11px] mb-1">Số tuần HK</label>
                       <input
-                        type="text"
-                        value={formNotes}
-                        onChange={(e) => setFormNotes(e.target.value)}
-                        placeholder="VD: 2 lớp Mĩ thuật liên trường..."
-                        className="w-full bg-white border border-purple-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:ring-2 focus:ring-purple-500"
+                        type="number"
+                        min="1"
+                        max="35"
+                        value={formWeeks}
+                        onChange={(e) => setFormWeeks(parseInt(e.target.value, 10) || 18)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-bold text-center text-xs focus:ring-2 focus:ring-blue-600 shadow-2xs"
+                        required
                       />
                     </div>
                   </div>
-                )}
-              </div>
 
-              {/* 4. Multi-Class Selector (Checkboxes for batch creation) */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Lớp học được gán {formType === 'TEACHING' ? '(Có thể chọn nhiều lớp để tự động tách dòng)' : '(Tùy chọn)'}
-                </label>
-                <div className="grid grid-cols-4 gap-1.5 max-h-36 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-200">
-                  {classes.filter((c) => !c.isDeleted).map((c) => {
-                    const isSelected = formClassIds.includes(c.id);
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => handleToggleClass(c.id)}
-                        className={`py-1.5 px-2 rounded-lg text-center font-bold text-xs transition border ${
-                          isSelected
-                            ? 'bg-blue-800 text-white border-blue-900'
-                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        {c.name}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  Đã chọn: <strong className="text-blue-900">{formClassIds.length} lớp</strong>
-                  {formClassIds.length > 1 && ' (Hệ thống sẽ tạo riêng biệt từng bản ghi cho mỗi lớp)'}
-                </div>
-              </div>
+                  {/* 7. LIVE WORKLOAD IMPACT PREVIEW CARD */}
+                  {modalWorkloadPreview && (
+                    <div className="bg-gradient-to-br from-blue-50/90 via-indigo-50/50 to-white border border-blue-200 rounded-2xl p-3.5 space-y-2.5 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-blue-950 text-xs flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-blue-700" />
+                          <span>Dự kiến thay đổi định mức giáo viên:</span>
+                        </span>
+                        <span className="text-[10px] font-bold text-blue-800">
+                          {modalWorkloadPreview.teacher.fullName} ({modalWorkloadPreview.teacher.code})
+                        </span>
+                      </div>
 
-              {/* 5. Periods per week & Session */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Số tiết/tuần *</label>
-                  <input
-                    id="modal-periods-input"
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={formPeriodsPerWeek}
-                    onChange={(e) => setFormPeriodsPerWeek(parseInt(e.target.value, 10) || 1)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-black text-center text-sm focus:ring-2 focus:ring-blue-600"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Buổi dạy</label>
-                  <select
-                    value={formSession}
-                    onChange={(e) => setFormSession(e.target.value as any)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600"
-                  >
-                    <option value="MORNING">Buổi sáng (Buổi 1)</option>
-                    <option value="AFTERNOON">Buổi chiều (Buổi 2)</option>
-                    <option value="FULL_DAY">2 buổi/ngày</option>
-                    <option value="ACTIVITY">Hoạt động / Khác</option>
-                  </select>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-white p-2 rounded-xl border border-slate-200/80 shadow-2xs">
+                          <div className="text-[10px] text-slate-500 font-medium">Hiện tại</div>
+                          <div className="font-bold text-xs text-slate-800">
+                            {modalWorkloadPreview.currentPeriods} / {modalWorkloadPreview.quota}t
+                          </div>
+                          <div className="text-[9px] font-semibold text-slate-500">
+                            {modalWorkloadPreview.currentDiff < 0
+                              ? `Thiếu ${Math.abs(modalWorkloadPreview.currentDiff)}t`
+                              : modalWorkloadPreview.currentDiff === 0
+                              ? 'Đủ định mức'
+                              : `Vượt +${modalWorkloadPreview.currentDiff}t`}
+                          </div>
+                        </div>
+
+                        <div className="bg-blue-100/70 p-2 rounded-xl border border-blue-300 shadow-2xs">
+                          <div className="text-[10px] text-blue-800 font-bold">Thêm mới</div>
+                          <div className="font-black text-xs text-blue-950">
+                            +{modalWorkloadPreview.addedPeriods} tiết
+                          </div>
+                          <div className="text-[9px] font-medium text-blue-800">
+                            {modalWorkloadPreview.classCount} lớp × {formPeriodsPerWeek}t
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-2 rounded-xl border border-slate-200/80 shadow-2xs">
+                          <div className="text-[10px] text-slate-500 font-medium">Sau khi thêm</div>
+                          <div className="font-black text-xs text-slate-900">
+                            {modalWorkloadPreview.projectedPeriods} / {modalWorkloadPreview.quota}t
+                          </div>
+                          <div
+                            className={`text-[9px] font-bold ${
+                              modalWorkloadPreview.projectedDiff === 0
+                                ? 'text-emerald-700'
+                                : modalWorkloadPreview.projectedDiff < 0
+                                ? 'text-amber-700'
+                                : 'text-indigo-700'
+                            }`}
+                          >
+                            {modalWorkloadPreview.projectedDiff === 0
+                              ? '🎯 Vừa đủ định mức'
+                              : modalWorkloadPreview.projectedDiff < 0
+                              ? `Thiếu ${Math.abs(modalWorkloadPreview.projectedDiff)}t`
+                              : `Vượt +${modalWorkloadPreview.projectedDiff}t`}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Action Buttons */}
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition"
+                  className="px-4 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition cursor-pointer text-xs"
                 >
                   Hủy
                 </button>
@@ -2871,7 +3279,7 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                   <button
                     type="button"
                     onClick={(e) => handleSave(e, true)}
-                    className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-4 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-4 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer text-xs"
                   >
                     <PlusCircle className="w-4 h-4" />
                     <span>Lưu & Nhập tiếp</span>
@@ -2880,9 +3288,10 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                 <button
                   id="modal-submit-assignment-btn"
                   type="submit"
-                  className="bg-blue-800 hover:bg-blue-900 text-white font-bold px-5 py-2 rounded-xl shadow-xs transition cursor-pointer"
+                  className="bg-blue-800 hover:bg-blue-900 text-white font-bold px-5 py-2 rounded-xl shadow-xs transition cursor-pointer text-xs flex items-center gap-1.5"
                 >
-                  {editingAssignment ? 'Lưu cập nhật' : 'Xác nhận phân công'}
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{editingAssignment ? 'Lưu cập nhật' : 'Xác nhận phân công'}</span>
                 </button>
               </div>
             </form>

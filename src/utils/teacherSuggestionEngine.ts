@@ -258,3 +258,172 @@ export function getSmartTeacherSuggestions({
 
   return suggestions.slice(0, maxResults);
 }
+
+/**
+ * Kiểm tra xem một môn học có thuộc diện "GỢI Ý" cho giáo viên hay không.
+ * Căn cứ vào:
+ * 1. Môn có thể dạy của giáo viên (subjectsCanTeach)
+ * 2. Chuyên ngành đào tạo / chuyên môn chính (major)
+ * 3. Môn thuộc tổ chuyên môn của giáo viên (department)
+ * 4. Môn giáo viên đang được phân công giảng dạy trong phương án
+ */
+export function isSubjectSuggestedForTeacher(
+  subject: Subject,
+  teacher: Teacher | null | undefined,
+  departments: Department[] = [],
+  assignments: TeachingAssignment[] = [],
+  allTeachers: Teacher[] = []
+): { isSuggested: boolean; reasons: string[]; isPrimary: boolean } {
+  if (!teacher || !subject) return { isSuggested: false, reasons: [], isPrimary: false };
+
+  const reasons: string[] = [];
+  let isPrimary = false;
+
+  const sId = (subject.id || '').toLowerCase().trim();
+  const sCode = (subject.code || '').toLowerCase().trim();
+  const sName = (subject.name || '').toLowerCase().trim();
+  const sShort = (subject.shortName || '').toLowerCase().trim();
+
+  // 1. Giáo viên đang được phân công môn này trong phương án
+  const hasActiveAssignment = assignments.some(
+    (a) => !a.isDeleted && a.teacherId === teacher.id && a.subjectId === subject.id
+  );
+  if (hasActiveAssignment) {
+    reasons.push('Đang phân công dạy');
+    isPrimary = true;
+  }
+
+  // 2. Thuộc danh sách môn có thể dạy (subjectsCanTeach)
+  if (Array.isArray(teacher.subjectsCanTeach)) {
+    const matchedCanTeach = teacher.subjectsCanTeach.some((item) => {
+      if (!item) return false;
+      const lower = item.toLowerCase().trim();
+      return (
+        lower === sId ||
+        lower === sCode ||
+        lower === sName ||
+        lower === sShort ||
+        sName.includes(lower) ||
+        lower.includes(sName)
+      );
+    });
+    if (matchedCanTeach) {
+      reasons.push('Môn có thể dạy');
+      isPrimary = true;
+    }
+  }
+
+  // 3. Khớp theo chuyên môn đào tạo (major)
+  if (teacher.major) {
+    const m = teacher.major.toLowerCase().trim();
+    if (
+      sName.includes(m) ||
+      m.includes(sName) ||
+      (sShort && (sShort.includes(m) || m.includes(sShort))) ||
+      (sCode && m.includes(sCode))
+    ) {
+      reasons.push(`Chuyên môn: ${teacher.major}`);
+      isPrimary = true;
+    } else if (sCode === 'khtn' || sName.includes('khoa học tự nhiên')) {
+      if (m.includes('lý') || m.includes('vật lí') || m.includes('hóa') || m.includes('sinh') || m.includes('tự nhiên')) {
+        reasons.push(`KHTN (${teacher.major})`);
+        isPrimary = true;
+      }
+    } else if (sCode === 'su_dia' || sName.includes('lịch sử') || sName.includes('địa')) {
+      if (m.includes('sử') || m.includes('địa')) {
+        reasons.push(`LS&ĐL (${teacher.major})`);
+        isPrimary = true;
+      }
+    } else if (sCode === 'nghe_thuat' || sName.includes('nghệ thuật')) {
+      if (m.includes('nhạc') || m.includes('họa') || m.includes('mỹ thuật') || m.includes('mĩ thuật')) {
+        reasons.push(`Nghệ thuật (${teacher.major})`);
+        isPrimary = true;
+      }
+    } else if (sName.includes('toán') && m.includes('toán')) {
+      reasons.push('Chuyên môn Toán');
+      isPrimary = true;
+    } else if ((sName.includes('tin') || sCode === 'tin') && (m.includes('tin') || m.includes('toán tin'))) {
+      reasons.push('Chuyên môn Tin học');
+      isPrimary = true;
+    } else if (sName.includes('văn') && (m.includes('văn') || m.includes('ngữ văn'))) {
+      reasons.push('Chuyên môn Ngữ văn');
+      isPrimary = true;
+    } else if (sName.includes('anh') && (m.includes('anh') || m.includes('ngoại ngữ') || m.includes('tiếng anh'))) {
+      reasons.push('Chuyên môn Tiếng Anh');
+      isPrimary = true;
+    } else if (sName.includes('thể chất') && (m.includes('thể dục') || m.includes('thể chất') || m.includes('gdtc'))) {
+      reasons.push('Chuyên môn GDTC');
+      isPrimary = true;
+    } else if (sName.includes('công nghệ') && (m.includes('công nghệ') || m.includes('kỹ thuật'))) {
+      reasons.push('Chuyên môn Công nghệ');
+      isPrimary = true;
+    }
+  }
+
+  // 4. Môn thuộc tổ chuyên môn của giáo viên
+  if (teacher.departmentId) {
+    // 4.1 Subject có trực tiếp departmentId trùng với giáo viên
+    if (subject.departmentId && subject.departmentId === teacher.departmentId) {
+      const dept = departments.find((d) => d.id === teacher.departmentId);
+      reasons.push(`Tổ ${dept?.name || 'chuyên môn'}`);
+    } else {
+      const dept = departments.find((d) => d.id === teacher.departmentId);
+      if (dept) {
+        const dName = (dept.name + ' ' + (dept.fullName || '')).toLowerCase();
+        if (
+          (dName.includes('toán') || dName.includes('tin')) &&
+          (sName.includes('toán') || sName.includes('tin') || sCode === 'toan' || sCode === 'tin')
+        ) {
+          reasons.push(`Tổ ${dept.name}`);
+        } else if (
+          (dName.includes('tự nhiên') || dName.includes('khtn')) &&
+          (sName.includes('tự nhiên') || sCode === 'khtn' || sName.includes('công nghệ') || sCode === 'cn')
+        ) {
+          reasons.push(`Tổ ${dept.name}`);
+        } else if (
+          (dName.includes('xã hội') || dName.includes('khxh')) &&
+          (sName.includes('văn') || sName.includes('sử') || sName.includes('địa') || sName.includes('công dân') || sCode === 'gdcd' || sName.includes('địa phương'))
+        ) {
+          reasons.push(`Tổ ${dept.name}`);
+        } else if (
+          (dName.includes('ngoại ngữ') || dName.includes('tiếng anh')) &&
+          (sName.includes('tiếng anh') || sName.includes('ngoại ngữ') || sCode === 'tieng_anh' || sCode === 'anh')
+        ) {
+          reasons.push(`Tổ ${dept.name}`);
+        } else if (
+          (dName.includes('nghệ thuật') || dName.includes('năng khiếu')) &&
+          (sName.includes('âm nhạc') || sName.includes('mĩ thuật') || sName.includes('thể chất') || sName.includes('nghệ thuật'))
+        ) {
+          reasons.push(`Tổ ${dept.name}`);
+        } else if (allTeachers.length > 0) {
+          // 4.2 Kiểm tra xem có GV nào khác trong cùng tổ có thể dạy môn này không
+          const isTaughtByDeptTeacher = allTeachers.some(
+            (t) =>
+              t.departmentId === teacher.departmentId &&
+              (t.subjectsCanTeach?.some((c) => {
+                const lc = c.toLowerCase().trim();
+                return lc === sCode || lc === sId || sName.includes(lc);
+              }) || (t.major && sName.includes(t.major.toLowerCase())))
+          );
+          if (isTaughtByDeptTeacher) {
+            reasons.push(`Tổ ${dept.name}`);
+          }
+        }
+      }
+    }
+  }
+
+  // 5. Môn hoạt động trải nghiệm / hướng nghiệp (mọi GV đều có thể dạy theo phân công)
+  if (sName.includes('hoạt động trải nghiệm') || sCode === 'hdtn' || sCode === 'hdtn_hn') {
+    if (reasons.length === 0) {
+      reasons.push('HĐTN (Dạy kiêm nhiệm)');
+    }
+  }
+
+  return {
+    isSuggested: reasons.length > 0,
+    reasons,
+    isPrimary,
+  };
+}
+
