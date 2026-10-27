@@ -587,7 +587,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     setFormBdHsgInfo(t.bdHsgInfo || '');
     setFormOffDay(t.offDay || '');
     setFormNotes(t.notes || '');
-    const curPos = getTeacherPositions(t, departments, duties, dataStore.getAssignments());
+    const curPos = getTeacherPositions(t, departments, duties, dataStore.getAssignments(), dataStore.getClasses());
     setFormPositions(Array.from(new Set([...(t.positions || []), ...curPos])));
     setFormSubjects(Array.from(new Set((t.subjectsCanTeach || []).map((s) => s.trim()).filter(Boolean))));
     setIsFormDirty(false);

@@ -27,7 +27,7 @@ import { auth, isSystemSyncEmail } from './firebase/config';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
-import { dataStore, INITIAL_USER_PROFILES, DEFAULT_GUEST_PROFILE, isSameEmail, isSuperAdminEmail } from './repositories/dataStore';
+import { dataStore, INITIAL_USER_PROFILES, DEFAULT_GUEST_PROFILE, isSameEmail, isSuperAdminEmail, isAdminSchool } from './repositories/dataStore';
 import { UserProfile } from './types';
 import { calculateAllTeachersWorkload } from './calculation-engine/workloadCalculator';
 import { runFullValidation } from './validation/assignmentValidator';
@@ -67,18 +67,18 @@ export default function App() {
     }
 
     const urlSchoolId = dataStore.detectUrlSchoolId();
-    const targetSchool = urlSchoolId || dataStore.getSchoolId() || 'school_quyhop';
+    const targetSchool = urlSchoolId || dataStore.getSchoolId() || 'school_admin';
     const isAuthedForThisSchool = sessionStorage.getItem(`pccm_session_auth_${targetSchool}`) === 'true';
     const authedSchoolId = sessionStorage.getItem('pccm_session_school_id');
     const isGeneralAuthed = sessionStorage.getItem('pccm_authenticated_session') === 'true';
     const isSuper = sessionStorage.getItem('pccm_is_super_admin') === 'true';
 
     // Khi mở qua liên kết chia sẻ trường học (?schoolId=...), bắt buộc phải xác thực mật khẩu cho đúng trường này
-    if (urlSchoolId && urlSchoolId !== 'school_quyhop') {
+    if (urlSchoolId && !isAdminSchool(urlSchoolId)) {
       return isAuthedForThisSchool && authedSchoolId === urlSchoolId;
     }
 
-    if (isSuper && (!urlSchoolId || urlSchoolId === 'school_quyhop')) return true;
+    if (isSuper && (!urlSchoolId || isAdminSchool(urlSchoolId))) return true;
     return isGeneralAuthed && (isAuthedForThisSchool || authedSchoolId === targetSchool || !urlSchoolId);
   });
 
@@ -87,7 +87,7 @@ export default function App() {
     // Kiểm tra xem tab này đã xác thực mật khẩu cho đúng trường này chưa.
     // Nếu chưa, xóa sạch các cờ session kế thừa để bắt buộc hiển thị màn hình đăng nhập.
     const urlSchoolId = dataStore.detectUrlSchoolId();
-    if (urlSchoolId && urlSchoolId !== 'school_quyhop' && typeof window !== 'undefined') {
+    if (urlSchoolId && !isAdminSchool(urlSchoolId) && typeof window !== 'undefined') {
       const isAuthedForUrlSchool = sessionStorage.getItem(`pccm_session_auth_${urlSchoolId}`) === 'true';
       const authedSchoolId = sessionStorage.getItem('pccm_session_school_id');
       if (!isAuthedForUrlSchool || authedSchoolId !== urlSchoolId) {
@@ -167,15 +167,15 @@ export default function App() {
       const email = firebaseUser.email || '';
       const isSuper = isSuperAdminEmail(email);
       const urlSchoolId = dataStore.detectUrlSchoolId();
-      const targetSchool = (urlSchoolId && urlSchoolId !== 'school_quyhop')
+      const targetSchool = (urlSchoolId && !isAdminSchool(urlSchoolId))
         ? urlSchoolId
-        : (dataStore.getSchoolId() || 'school_quyhop');
+        : (dataStore.getSchoolId() || 'school_admin');
 
-      // Tự động kiểm tra và phục hồi bản quyền của trường nếu là Quỳ Hợp
+      // Tự động kiểm tra và phục hồi bản quyền của trường nếu là school_admin
       const currentLic = dataStore.getSchoolLicenseById(targetSchool);
-      if (!currentLic && targetSchool === 'school_quyhop') {
+      if (!currentLic && isAdminSchool(targetSchool)) {
         dataStore.saveSchoolLicense({
-          id: 'school_quyhop',
+          id: 'school_admin',
           schoolName: 'TRƯỜNG THCS ADMIN',
           adminEmail: 'nguyentoanqh@gmail.com',
           adminName: 'Thầy Nguyễn Văn Toàn',
@@ -525,7 +525,7 @@ export default function App() {
   }, []);
 
   // Xác định trường học mục tiêu cần kiểm tra quyền truy cập
-  const currentActiveSchoolId = currentSchoolId || dataStore.getSchoolId() || 'school_quyhop';
+  const currentActiveSchoolId = currentSchoolId || dataStore.getSchoolId() || 'school_admin';
 
   // Kiểm tra phiên làm việc: Bắt buộc đã xác thực bảo mật cho đúng trường currentActiveSchoolId
   const isSchoolSessionActive = useMemo(() => {
@@ -535,7 +535,7 @@ export default function App() {
 
     // Nếu mở qua liên kết chia sẻ của trường học riêng (?schoolId=school_xyz...):
     // BẮT BUỘC người dùng phải đăng nhập đúng vào trường này!
-    if (urlSchoolId && urlSchoolId !== 'school_quyhop') {
+    if (urlSchoolId && !isAdminSchool(urlSchoolId)) {
       const isAuthedForUrlSchool = sessionStorage.getItem(`pccm_session_auth_${urlSchoolId}`) === 'true';
       const authedSchoolId = sessionStorage.getItem('pccm_session_school_id');
       const isAuthed = (isAuthedForUrlSchool || authedSchoolId === urlSchoolId) && isAuthenticatedSession;
@@ -569,7 +569,7 @@ export default function App() {
     }
 
     // 3. Nếu đã đăng nhập bằng tài khoản Super Admin (Chủ sở hữu hệ thống):
-    if (sessionStorage.getItem('pccm_is_super_admin') === 'true' && (!urlSchoolId || urlSchoolId === 'school_quyhop')) {
+    if (sessionStorage.getItem('pccm_is_super_admin') === 'true' && (!urlSchoolId || isAdminSchool(urlSchoolId))) {
       return true;
     }
 
@@ -588,7 +588,7 @@ export default function App() {
   const handleLoginSuccess = useCallback((profile: UserProfile) => {
     isExplicitLoggedOutRef.current = false;
     setIsExplicitLoggedOut(false);
-    const sId = profile.schoolId || currentActiveSchoolId || dataStore.getSchoolId() || 'school_quyhop';
+    const sId = profile.schoolId || currentActiveSchoolId || dataStore.getSchoolId() || 'school_admin';
     const isSuper = isSuperAdminEmail(profile.email);
     const sanitizedProfile: UserProfile = {
       ...profile,
@@ -621,6 +621,15 @@ export default function App() {
     // Đánh dấu hoàn tất setup cho trường được cấp phép để không bị chặn popup
     dataStore.setInitialSetupCompleted(true);
     setIsInitialSetupOpen(false);
+
+    // Kéo dữ liệu ngầm từ Cloud Firestore nếu cần và cập nhật lại state
+    dataStore.ensureSchoolDataLoaded(sId).then(() => {
+      setTeachers(dataStore.getTeachers(true));
+      setClasses(dataStore.getClasses(true));
+      setAssignments(dataStore.getAssignments(undefined, undefined, undefined, true));
+      setSubjects(dataStore.getSubjects());
+      setDepartments(dataStore.getDepartments());
+    }).catch(() => {});
   }, [currentActiveSchoolId]);
 
   if (isAuthLoading) {
@@ -648,9 +657,9 @@ export default function App() {
   if (!licenseCheck.isValid && firebaseUser) {
     const email = firebaseUser.email || '';
     if (isSameEmail(email, 'thongke.qh@gmail.com') || isSuperAdminEmail(email)) {
-      const activeSchool = dataStore.getSchoolId() || 'school_quyhop';
+      const activeSchool = dataStore.getSchoolId() || 'school_admin';
       const existing = dataStore.getSchoolLicenseById(activeSchool);
-      const name = existing?.schoolName || (activeSchool === 'school_quyhop' ? 'TRƯỜNG THCS ADMIN' : activeSchool === 'school_thongke' ? 'TRƯỜNG THCS THỐNG KÊ' : activeSchool);
+      const name = existing?.schoolName || (isAdminSchool(activeSchool) ? 'TRƯỜNG THCS ADMIN' : activeSchool);
       dataStore.saveSchoolLicense({
         id: activeSchool,
         schoolName: name,
@@ -660,7 +669,7 @@ export default function App() {
         status: 'active',
         planType: existing?.planType || 'annual',
         expiresAt: existing?.expiresAt || '2027-08-31T23:59:59.000Z',
-        contactPhone: existing?.contactPhone || (activeSchool === 'school_quyhop' ? '0961 285 888' : '0961234567'),
+        contactPhone: existing?.contactPhone || (isAdminSchool(activeSchool) ? '0961 285 888' : '0961234567'),
         notes: existing?.notes || `Tự động kích hoạt bản quyền hợp lệ ${activeSchool}`,
         createdAt: existing?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -730,7 +739,7 @@ export default function App() {
           const superAdmin =
             dataStore.getUsers().find((u) => u.isSuperAdmin || isSuperAdminEmail(u.email)) ||
             INITIAL_USER_PROFILES[0];
-          dataStore.setSchoolId('school_quyhop');
+          dataStore.setSchoolId('school_admin');
           dataStore.setCurrentUser(superAdmin);
           setCurrentUser(superAdmin);
         }}

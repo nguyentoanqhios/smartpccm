@@ -187,7 +187,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const teacherMatch = dataStore.getTeachers().find((t) => isSameEmail(t.email, gEmail));
 
       // Xác định trường mục tiêu
-      const targetSchool = matchingLic?.id || profile?.schoolId || schoolId || urlParams.schoolId || (isThongKe ? 'school_thongke' : 'school_quyhop');
+      const targetSchool = matchingLic?.id || profile?.schoolId || schoolId || urlParams.schoolId || (isThongKe ? 'school_thongke' : 'school_admin');
       const targetLic = matchingLic || dataStore.getSchoolLicenseById(targetSchool);
 
       // KIỂM TRA BẢO MẬT BẮT BUỘC:
@@ -327,12 +327,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
     // Xác định mã trường mục tiêu: Ưu tiên license khớp email -> detectedUrlSchoolId -> schoolId đã chọn
     let targetSchoolId = matchingLicense?.id;
     if (!targetSchoolId) {
-      if (detectedUrlSchoolId && detectedUrlSchoolId !== 'school_quyhop') {
+      if (detectedUrlSchoolId && !isAdminSchool(detectedUrlSchoolId)) {
         targetSchoolId = detectedUrlSchoolId;
-      } else if (schoolId && schoolId !== 'school_quyhop') {
+      } else if (schoolId && !isAdminSchool(schoolId)) {
         targetSchoolId = schoolId;
       } else {
-        targetSchoolId = detectedUrlSchoolId || schoolId || 'school_quyhop';
+        targetSchoolId = 'school_admin';
       }
     }
 
@@ -387,7 +387,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       isValidPass = password === existingUser.password;
     } else if (isSuperAdmin) {
       isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
-    } else if (targetSchoolId !== 'school_quyhop') {
+    } else if (!isAdminSchool(targetSchoolId)) {
       // Trường được cấp quyền riêng: BẮT BUỘC ĐÚNG MẬT KHẨU ĐƯỢC CẤP
       if (assignedPass) {
         isValidPass = password === assignedPass;
@@ -452,7 +452,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
         }
       }
 
-      dataStore.setSchoolId(targetSchoolId);
+      // Đảm bảo cơ sở dữ liệu trường học được tải về đầy đủ từ Cloud Firestore (tránh mất trắng dữ liệu khi deploy code mới)
+      await dataStore.ensureSchoolDataLoaded(targetSchoolId);
       dataStore.setCurrentUser(profile);
       setSuccessMessage(isSuperAdmin ? 'Đăng nhập thành công với quyền Chủ sở hữu hệ thống (Super Admin)!' : 'Đăng nhập thành công với tài khoản quản trị trường!');
       

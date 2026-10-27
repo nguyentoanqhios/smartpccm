@@ -456,7 +456,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
 
       // 3. Lọc theo Vị trí công việc (Hiệu trưởng, Phó hiệu trưởng, Tổ trưởng, Tổ phó, Kiêm nhiệm...)
       if (teacherFilterPosition !== 'ALL') {
-        const posList = getTeacherPositions(t, departments, duties, assignments);
+        const posList = getTeacherPositions(t, departments, duties, assignments, classes);
         if (teacherFilterPosition === 'NONE') {
           if (posList.length > 0) return false;
         } else {
@@ -592,7 +592,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
     setEditTeacherEmail(t.email || '');
     setEditTeacherStatus(t.status || 'ACTIVE');
     setEditTeacherNotes(t.notes || '');
-    const curPos = getTeacherPositions(t, departments, duties, assignments);
+    const curPos = getTeacherPositions(t, departments, duties, assignments, classes);
     setEditTeacherPositions(curPos);
     setNewCustomPositionInput('');
     setIsEditTeacherDirty(false);
@@ -2834,7 +2834,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                   {filteredTeachers.map((t, idx) => {
                     const isSelected = selectedTeacherIds.includes(t.id);
                     const dept = departments.find((d) => d.id === t.departmentId);
-                    const positions = getTeacherPositions(t, departments, duties, assignments);
+                    const positions = getTeacherPositions(t, departments, duties, assignments, classes);
                     const tkbName = t.timetableName || t.shortName || (t.fullName ? t.fullName.trim().split(/\s+/).slice(-1)[0] : '');
                     return (
                       <tr key={t.id} className={`hover:bg-slate-50 transition ${isSelected ? 'bg-blue-50/60' : ''}`}>

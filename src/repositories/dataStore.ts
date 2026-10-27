@@ -475,18 +475,6 @@ class DataStore {
     this.hasUnsavedChangesFlag = false;
     this.loadFromStorage();
 
-    // THỰC HIỆN LỆNH CỦA NGƯỜI DÙNG: Xóa sạch dữ liệu mẫu giáo viên, kiêm nhiệm, lớp trên app, đám mây
-    // Sau đây mở phần mềm chỉ có sẵn danh mục kiêm nhiệm, môn học và khung tiết mặc định, danh mục viết tắt
-    if (typeof window !== 'undefined') {
-      try {
-        const orderExecuted = localStorage.getItem('pccm_clean_slate_order_executed_v4');
-        if (!orderExecuted) {
-          this.clearAllOperationalData(this.currentSchoolId, true);
-          localStorage.setItem('pccm_clean_slate_order_executed_v4', 'true');
-        }
-      } catch {}
-    }
-
     firestoreRepository.addQuotaListener(() => {
       this.stopFirestoreRealtimeSync();
       this.cloudSyncStatus = 'idle';
@@ -498,6 +486,13 @@ class DataStore {
     if (!firestoreRepository.hasQuotaExhausted()) {
       this.initFirestoreRealtimeSync(this.currentSchoolId);
     }
+
+    // Nếu dữ liệu cục bộ chưa có hoặc rỗng sau khi tải (ví dụ trên trình duyệt mới hoặc sau khi deploy code),
+    // tự động kiểm tra và kéo bản lưu mới nhất từ Cloud Firestore về máy cho trường hiện tại
+    if (this.currentSchoolId && this.teachers.length === 0 && this.classes.length === 0 && !firestoreRepository.hasQuotaExhausted()) {
+      this.pullDataFromFirestore(this.currentSchoolId).catch(() => {});
+    }
+
     this.isInitializing = false;
     this.hasUnsavedChangesFlag = false;
   }
@@ -1184,13 +1179,25 @@ class DataStore {
     const targetSchoolName = license?.schoolName || (urlParams.schoolId === schoolId ? urlParams.schoolName : null);
     const targetEmail = license?.adminEmail || (urlParams.schoolId === schoolId ? urlParams.adminEmail : null);
 
-    if (existingSavedInfo && existingSavedInfo.schoolName) {
-      let cleanSchoolName = isQuyHop ? 'TRƯỜNG THCS ADMIN' : (targetSchoolName || existingSavedInfo.schoolName);
-      // cleanSchoolName kept for non-admin school
-      let cleanAuthority = existingSavedInfo.authorityName || '';
-      let cleanPrincipal = existingSavedInfo.principalName || '';
-      let cleanDean = existingSavedInfo.deanName || '';
-      let cleanProvince = existingSavedInfo.provinceName || '';
+    const scopedTeacherKey = this.getScopedKey(STORAGE_KEYS.TEACHERS, schoolId);
+    const loadedTeachers = this.getItem<Teacher[] | null>(scopedTeacherKey, null);
+    const scopedClassKey = this.getScopedKey(STORAGE_KEYS.CLASSES, schoolId);
+    const loadedClasses = this.getItem<SchoolClass[] | null>(scopedClassKey, null);
+    const scopedAssignmentKey = this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, schoolId);
+    const loadedAssignments = this.getItem<TeachingAssignment[] | null>(scopedAssignmentKey, null);
+
+    const hasAnyLocalData =
+      (existingSavedInfo && Boolean(existingSavedInfo.schoolName)) ||
+      (Array.isArray(loadedTeachers) && loadedTeachers.length > 0) ||
+      (Array.isArray(loadedClasses) && loadedClasses.length > 0) ||
+      (Array.isArray(loadedAssignments) && loadedAssignments.length > 0);
+
+    if (hasAnyLocalData) {
+      let cleanSchoolName = isQuyHop ? 'TRƯỜNG THCS ADMIN' : (targetSchoolName || existingSavedInfo?.schoolName || 'TRƯỜNG THCS');
+      let cleanAuthority = existingSavedInfo?.authorityName || '';
+      let cleanPrincipal = existingSavedInfo?.principalName || license?.adminName || '';
+      let cleanDean = existingSavedInfo?.deanName || '';
+      let cleanProvince = existingSavedInfo?.provinceName || '';
 
       if (!isQuyHop) {
         if (!targetSchoolName && cleanSchoolName.toUpperCase().includes('HIM LAM')) {
@@ -1200,7 +1207,7 @@ class DataStore {
           cleanAuthority = 'ỦY BAN NHÂN DÂN XÃ';
         }
         if (!cleanPrincipal || cleanPrincipal.includes('Nguyễn Văn Toàn')) {
-          cleanPrincipal = 'Nguyễn Văn A';
+          cleanPrincipal = license?.adminName || 'Nguyễn Văn A';
         }
         if (!cleanDean || cleanDean.includes('Trần Văn Minh')) {
           cleanDean = 'Trần Văn B';
@@ -1210,17 +1217,17 @@ class DataStore {
         }
       }
 
-      let cleanEmail = !isQuyHop && targetEmail ? targetEmail : (existingSavedInfo.email || '');
+      let cleanEmail = !isQuyHop && targetEmail ? targetEmail : (existingSavedInfo?.email || license?.adminEmail || '');
       if (!isQuyHop && (!cleanEmail || cleanEmail === 'nguyentoanqh@gmail.com' || cleanEmail.includes('nguyentoanqhios') || cleanEmail.includes('nguyentoanqhai'))) {
-        cleanEmail = targetEmail || 'c2truong@edu.vn';
+        cleanEmail = targetEmail || license?.adminEmail || 'c2truong@edu.vn';
       }
-      let cleanPhone = !isQuyHop && license?.contactPhone ? license.contactPhone : (existingSavedInfo.phone || '');
+      let cleanPhone = !isQuyHop && license?.contactPhone ? license.contactPhone : (existingSavedInfo?.phone || '');
       if (!isQuyHop && (!cleanPhone || cleanPhone === '0961 285 888' || cleanPhone === '0961285888' || cleanPhone === '0961234567')) {
         cleanPhone = license?.contactPhone || '0987654321';
       }
 
       this.schoolInfo = {
-        ...existingSavedInfo,
+        ...(existingSavedInfo || DEFAULT_SCHOOL_INFO),
         schoolName: cleanSchoolName,
         authorityName: cleanAuthority,
         principalName: cleanPrincipal,
@@ -1230,25 +1237,29 @@ class DataStore {
         phone: cleanPhone,
       };
 
-      const loadedTeachers = this.getItem<Teacher[] | null>(this.getScopedKey(STORAGE_KEYS.TEACHERS, schoolId), null);
       this.teachers = Array.isArray(loadedTeachers)
         ? loadedTeachers
             .filter((t) => (t.schoolId === schoolId || !t.schoolId) && !/^tc_gv\d+$/.test(t.id))
             .map((t) => ({ ...t, schoolId }))
         : [];
 
-      const loadedClasses = this.getItem<SchoolClass[] | null>(this.getScopedKey(STORAGE_KEYS.CLASSES, schoolId), null);
       this.classes = Array.isArray(loadedClasses)
         ? loadedClasses.map((c) => ({ ...c, schoolId: c.schoolId || schoolId }))
         : [];
 
-      const loadedAssignments = this.getItem<TeachingAssignment[] | null>(this.getScopedKey(STORAGE_KEYS.ASSIGNMENTS, schoolId), null);
-      const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
-      this.assignments = Array.isArray(loadedAssignments)
-        ? loadedAssignments
+      if (Array.isArray(loadedAssignments)) {
+        const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
+        if (validTeacherIds.size > 0) {
+          this.assignments = loadedAssignments
             .filter((a) => (a.schoolId === schoolId || !a.schoolId) && validTeacherIds.has(a.teacherId) && !/^tc_gv\d+$/.test(a.teacherId))
-            .map((a) => ({ ...a, schoolId }))
-        : [];
+            .map((a) => ({ ...a, schoolId }));
+        } else {
+          // Bảo vệ toàn vẹn: Khi danh sách giáo viên tạm thời rỗng, giữ nguyên phân công
+          this.assignments = loadedAssignments.map((a) => ({ ...a, schoolId }));
+        }
+      } else {
+        this.assignments = [];
+      }
 
       this.branches = this.getItem(this.getScopedKey(STORAGE_KEYS.BRANCHES, schoolId), [...INITIAL_BRANCHES]);
       this.departments = this.getItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId), INITIAL_DEPARTMENTS.map((d) => ({
@@ -1271,15 +1282,17 @@ class DataStore {
       this.setItem(this.getScopedKey(STORAGE_KEYS.DUTIES, schoolId), this.duties);
       this.assignments = this.assignments.filter((a) => !isForbiddenDutyOrExemption(a));
       this.versions = this.getItem(this.getScopedKey(STORAGE_KEYS.VERSIONS, schoolId), INITIAL_VERSIONS);
-      this.cleanOrphanedAssignments();
+      if (this.teachers.length > 0) {
+        this.cleanOrphanedAssignments();
+      }
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
     } else if (isQuyHop) {
-      // DỮ LIỆU SẠCH BAN ĐẦU TRƯỜNG THCS QUỲ HỢP (Chỉ có sẵn môn, khung tiết, chức danh kiêm nhiệm, viết tắt)
-      const qLicense = this.getSchoolLicenseById('school_quyhop');
+      // DỮ LIỆU SẠCH BAN ĐẦU TRƯỜNG THCS QUỲ HỢP / ADMIN
+      const qLicense = this.getSchoolLicenseById('school_admin') || this.getSchoolLicenseById('school_quyhop');
       this.schoolInfo = {
         ...DEFAULT_SCHOOL_INFO,
-        schoolName: qLicense?.schoolName || DEFAULT_SCHOOL_INFO.schoolName,
+        schoolName: 'TRƯỜNG THCS ADMIN',
         phone: qLicense?.contactPhone || DEFAULT_SCHOOL_INFO.phone,
         email: qLicense?.adminEmail || DEFAULT_SCHOOL_INFO.email,
       };
@@ -1289,7 +1302,7 @@ class DataStore {
       this.branches = [...INITIAL_BRANCHES];
       this.departments = INITIAL_DEPARTMENTS.map((d) => ({
         ...d,
-        schoolId: 'school_quyhop',
+        schoolId: 'school_admin',
         teacherIds: [],
         headTeacherId: undefined,
         deputyTeacherId: undefined,
@@ -1299,14 +1312,14 @@ class DataStore {
       this.curriculum = [...INITIAL_CURRICULUM];
       this.duties = [...INITIAL_DUTIES];
       this.upgradeTenantStandardCatalog(schoolId);
-      this.cleanOrphanedAssignments();
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
-
+      // Tự động kiểm tra và kéo từ Cloud Firestore
+      this.pullDataFromFirestore(schoolId).catch(() => {});
     } else {
-      // DỮ LIỆU TRẮNG CHO TRƯỜNG MỚI / TENANT MỚI (TRẮNG HOÀN TOÀN)
-      const freshSchoolName = targetSchoolName || 'TRƯỜNG THCS MỚI';
-      const freshEmail = targetEmail || '';
+      // DỮ LIỆU BAN ĐẦU CHO TRƯỜNG MỚI ĐƯỢC CẤP QUYỀN
+      const freshSchoolName = targetSchoolName || license?.schoolName || 'TRƯỜNG THCS MỚI';
+      const freshEmail = targetEmail || license?.adminEmail || '';
       this.schoolInfo = {
         ...DEFAULT_SCHOOL_INFO,
         schoolName: freshSchoolName,
@@ -1315,14 +1328,14 @@ class DataStore {
         principalName: license?.adminName || '',
         deanName: '',
         phone: license?.contactPhone || '',
-        email: freshEmail || license?.adminEmail || '',
+        email: freshEmail,
         schoolYear: '2026-2027',
         branchName: '',
       };
-      this.teachers = []; // TRẮNG: 0 Giáo viên
-      this.classes = []; // TRẮNG: 0 Lớp học
-      this.assignments = []; // TRẮNG: 0 Phân công
-      this.curriculum = [...INITIAL_CURRICULUM]; // Phân phối chuẩn GDPT của Bộ GD&ĐT
+      this.teachers = [];
+      this.classes = [];
+      this.assignments = [];
+      this.curriculum = [...INITIAL_CURRICULUM];
       this.branches = [...INITIAL_BRANCHES];
       this.departments = INITIAL_DEPARTMENTS.map((d) => ({
         ...d,
@@ -1343,9 +1356,10 @@ class DataStore {
         this.setInitialSetupCompleted(false);
       }
       this.upgradeTenantStandardCatalog(schoolId);
-      this.cleanOrphanedAssignments();
       this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
+      // Kéo ngay từ Cloud Firestore nếu có bản lưu trên Cloud cho trường này
+      this.pullDataFromFirestore(schoolId).catch(() => {});
     }
   }
 
@@ -1444,6 +1458,62 @@ class DataStore {
     this.saveLocalCacheOnly();
   }
 
+  private cloudAutoSyncDebounceTimer: any = null;
+
+  /**
+   * Tự động đồng bộ liên tục ngầm lên Cloud Firestore (Debounced Auto-Sync)
+   * Đảm bảo mọi thay đổi (thêm/sửa/xóa GV, lớp, phân công, định mức) được lưu trữ an toàn trên đám mây,
+   * không bao giờ bị mất trắng khi tải lại trang, khởi động lại server hoặc đẩy code mới.
+   */
+  public scheduleAutoCloudSync(delayMs = 2500): void {
+    if (this.isInitializing || firestoreRepository.hasQuotaExhausted()) return;
+    if (this.cloudAutoSyncDebounceTimer) {
+      clearTimeout(this.cloudAutoSyncDebounceTimer);
+    }
+    this.cloudAutoSyncDebounceTimer = setTimeout(async () => {
+      this.cloudAutoSyncDebounceTimer = null;
+      try {
+        const sId = this.currentSchoolId || 'school_admin';
+        if (firestoreRepository.hasQuotaExhausted()) return;
+        if (!this.isTenantDataLoaded && sId !== 'school_admin') return;
+
+        // BẢO VỆ CHỐNG GHI ĐÈ TRẮNG DỮ LIỆU:
+        // Tuyệt đối không tự động đẩy đồng bộ lên Cloud khi danh sách giáo viên & lớp học đang rỗng
+        // để không làm mất dữ liệu của trường trên đám mây khi máy người dùng vừa mở hoặc sau khi deploy code.
+        if (this.teachers.length === 0 && this.classes.length === 0 && !isAdminSchool(sId)) {
+          return;
+        }
+
+        await ensureFirebaseAuth().catch(() => {});
+        const res = await firestoreRepository.syncAllDataToFirestore(sId, {
+          schoolInfo: this.schoolInfo,
+          teachers: this.teachers,
+          classes: this.classes,
+          subjects: this.subjects,
+          departments: this.departments,
+          assignments: this.assignments,
+          versions: this.versions,
+          curriculum: this.curriculum,
+          duties: this.duties,
+          branches: this.branches,
+          workplaces: this.workplaces,
+          abbreviations: this.abbreviationRules,
+          users: this.users,
+          schoolYears: this.schoolYears,
+        });
+        if (res.success) {
+          this.cloudSyncStatus = 'connected';
+          this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
+          this.setHasUnsavedChanges(false);
+        }
+      } catch (err) {
+        console.warn('Auto cloud sync notice:', err);
+      } finally {
+        this.notify();
+      }
+    }, delayMs);
+  }
+
   private saveToStorage(immediate = false) {
     if (!this.isInitializing) {
       this.hasUnsavedChangesFlag = true;
@@ -1453,6 +1523,7 @@ class DataStore {
           localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), 'true');
         } catch {}
       }
+      this.scheduleAutoCloudSync(2500);
     }
     if (immediate) {
       this.flushStorage();
@@ -1889,7 +1960,7 @@ class DataStore {
       } catch {}
     }
 
-    // 3. Nạp dữ liệu độc lập của trường mới
+    // 3. Nạp dữ liệu độc lập của trường mới từ local storage
     this.loadTenantData(schoolId);
 
     // 4. Khởi động lắng nghe realtime Firestore cho trường mới
@@ -1900,13 +1971,40 @@ class DataStore {
       this.currentUser.schoolId = schoolId;
     }
 
-    // Tự động tải snapshot mới nhất từ Cloud Firestore cho trường này
-    if (schoolId !== 'school_quyhop') {
+    // Tự động tải snapshot mới nhất từ Cloud Firestore cho trường này nếu trên máy chưa có GV hoặc Lớp
+    if (this.teachers.length === 0 || this.classes.length === 0) {
       this.pullDataFromFirestore(schoolId).catch(() => {});
     }
 
     // 6. Thông báo cập nhật toàn bộ giao diện
     this.notify();
+  }
+
+  /**
+   * Đảm bảo dữ liệu của trường học được tải về đầy đủ trước khi mở giao diện làm việc
+   * Nếu dữ liệu cục bộ rỗng (do máy mới, đổi trình duyệt hoặc sau khi deploy code),
+   * hàm này sẽ AWAIT kéo dữ liệu mới nhất từ Cloud Firestore về máy.
+   */
+  public async ensureSchoolDataLoaded(
+    schoolId: string,
+    onProgress?: (step: string, percent: number) => void
+  ): Promise<{ success: boolean; totalCount: number; message: string }> {
+    if (!schoolId) return { success: false, totalCount: 0, message: 'Thiếu mã trường' };
+    this.setSchoolId(schoolId);
+
+    // Nếu trên máy chưa có giáo viên hoặc lớp học, tự động kéo ngay từ Cloud Firestore
+    if (this.teachers.length === 0 && this.classes.length === 0) {
+      firestoreRepository.resetQuotaStatus();
+      onProgress?.('Đang kết nối Cloud Firestore và tải cơ sở dữ liệu trường...', 20);
+      const res = await this.pullDataFromFirestore(schoolId, onProgress);
+      return res;
+    }
+
+    return {
+      success: true,
+      totalCount: this.teachers.length + this.classes.length + this.assignments.length,
+      message: `Đã sẵn sàng ${this.teachers.length} giáo viên, ${this.classes.length} lớp học.`,
+    };
   }
 
   /**
@@ -2961,7 +3059,7 @@ class DataStore {
         'teachers',
         (items) => {
           if (sId !== this.currentSchoolId) return;
-          if (this.hasUnsavedChangesFlag) return;
+          if (this.hasUnsavedChangesFlag && this.teachers.length > 0) return;
           if (items && items.length > 0) {
             const deduped: Teacher[] = [];
             const seenIds = new Set<string>();
@@ -2978,6 +3076,7 @@ class DataStore {
               deduped.push(item);
             }
             this.teachers = deduped;
+            this.isTenantDataLoaded = true;
             this.saveLocalCacheOnly();
             this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
             this.notify();
@@ -2993,7 +3092,7 @@ class DataStore {
         'classes',
         (items) => {
           if (sId !== this.currentSchoolId) return;
-          if (this.hasUnsavedChangesFlag) return;
+          if (this.hasUnsavedChangesFlag && this.classes.length > 0) return;
           if (items && items.length > 0) {
             const deduped: SchoolClass[] = [];
             const seenIds = new Set<string>();
@@ -3008,6 +3107,7 @@ class DataStore {
               deduped.push(item);
             }
             this.classes = deduped;
+            this.isTenantDataLoaded = true;
             this.saveLocalCacheOnly();
             this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
             this.notify();
@@ -3023,7 +3123,7 @@ class DataStore {
         'subjects',
         (items) => {
           if (sId !== this.currentSchoolId) return;
-          if (this.hasUnsavedChangesFlag) return;
+          if (this.hasUnsavedChangesFlag && this.subjects.length > 0) return;
           if (items && items.length > 0) {
             this.subjects = items;
             this.saveLocalCacheOnly();
@@ -3041,7 +3141,7 @@ class DataStore {
         'departments',
         (items) => {
           if (sId !== this.currentSchoolId) return;
-          if (this.hasUnsavedChangesFlag) return;
+          if (this.hasUnsavedChangesFlag && this.departments.length > 0) return;
           if (items && items.length > 0) {
             this.departments = items;
             this.saveLocalCacheOnly();
@@ -3059,9 +3159,10 @@ class DataStore {
         'assignments',
         (items) => {
           if (sId !== this.currentSchoolId) return;
-          if (this.hasUnsavedChangesFlag) return;
+          if (this.hasUnsavedChangesFlag && this.assignments.length > 0) return;
           if (items && items.length > 0) {
             this.assignments = items;
+            this.isTenantDataLoaded = true;
             this.saveLocalCacheOnly();
             this.cloudLastSyncTime = new Date().toLocaleTimeString('vi-VN');
             this.notify();
@@ -3276,15 +3377,8 @@ class DataStore {
     targetSchoolId: string = this.currentSchoolId || 'school_admin',
     onProgress?: (step: string, percent: number) => void
   ): Promise<{ success: boolean; totalCount: number; message: string }> {
-    if (firestoreRepository.hasQuotaExhausted()) {
-      this.cloudSyncStatus = 'idle';
-      this.notify();
-      return {
-        success: false,
-        totalCount: 0,
-        message: 'Dung lượng miễn phí Cloud Firestore tạm thời đạt giới hạn hôm nay. Hệ thống đang sử dụng dữ liệu cục bộ (Offline-first) đảm bảo hoạt động bình thường 100%.',
-      };
-    }
+    // Luôn đặt lại cờ quota khi người dùng hoặc hệ thống chủ động gọi tải dữ liệu
+    firestoreRepository.resetQuotaStatus();
 
     this.cloudSyncStatus = 'syncing';
     this.notify();
@@ -3359,6 +3453,7 @@ class DataStore {
 
       onProgress?.('Hoàn tất lưu dữ liệu...', 95);
       this.currentSchoolId = targetSchoolId;
+      this.isTenantDataLoaded = true;
       this.saveLocalCacheOnly();
       this.setHasUnsavedChanges(false);
       this.cloudSyncStatus = 'connected';
@@ -3375,7 +3470,9 @@ class DataStore {
       return {
         success: true,
         totalCount,
-        message: `Đã tải thành công ${totalCount} bản ghi từ Cloud Firestore về máy cho trường [${this.schoolInfo.schoolName || targetSchoolId}].`,
+        message: totalCount > 0
+          ? `Đã tải thành công ${totalCount} bản ghi từ Cloud Firestore về máy cho trường [${this.schoolInfo.schoolName || targetSchoolId}].`
+          : `Đã kết nối Cloud Firestore thành công (Hiện tại trên Cloud chưa có dữ liệu giáo viên hoặc lớp học cho trường này).`,
       };
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
@@ -4191,6 +4288,11 @@ class DataStore {
    * Khử triệt để mọi phân công mồ côi (không thuộc giáo viên của trường hoặc thuộc giáo viên đã xóa / trường khác)
    */
   public cleanOrphanedAssignments(): void {
+    // SAFETY GUARD: Nếu danh sách giáo viên đang rỗng (ví dụ chưa tải xong hoặc đang đồng bộ),
+    // TUYỆT ĐỐI KHÔNG xóa bất kỳ phân công nào để bảo toàn dữ liệu 100%!
+    if (this.teachers.length === 0) {
+      return;
+    }
     const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
     this.assignments = this.assignments.filter((a) => {

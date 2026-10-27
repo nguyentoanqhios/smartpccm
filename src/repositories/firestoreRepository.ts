@@ -104,21 +104,21 @@ export function sanitizeFirestoreDocId(rawId?: string | null): string {
  */
 export function isQuotaExhaustedError(err: any): boolean {
   if (!err) return false;
-  const code = String(err?.code || '');
-  const msg = String(err?.message || '');
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || '').toLowerCase();
   return (
     code === 'resource-exhausted' ||
+    code === 'firestore/resource-exhausted' ||
     msg.includes('resource-exhausted') ||
-    msg.includes('Quota exceeded') ||
-    msg.includes('quota') ||
-    msg.includes('maximum backoff delay') ||
-    msg.includes('RESOURCE_EXHAUSTED')
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('maximum backoff delay')
   );
 }
 
 let _isQuotaExceeded = false;
 let _quotaExceededUntil = 0;
-const QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 phút giãn cách trước khi thử lại
+const QUOTA_COOLDOWN_MS = 30 * 1000; // 30 giây giãn cách trước khi tự động thử lại
 const _quotaListeners: (() => void)[] = [];
 
 export function addQuotaExceededListener(listener: () => void): () => void {
@@ -136,7 +136,7 @@ export function markQuotaExceeded(): void {
     try {
       if (typeof window !== 'undefined') {
         sessionStorage.setItem('pccm_firestore_quota_exceeded', String(_quotaExceededUntil));
-        localStorage.setItem('pccm_firestore_quota_exceeded', String(_quotaExceededUntil));
+        localStorage.removeItem('pccm_firestore_quota_exceeded');
       }
     } catch {}
     try {
@@ -158,7 +158,9 @@ export function isQuotaExceeded(): boolean {
   if (!_isQuotaExceeded) {
     if (typeof window !== 'undefined') {
       try {
-        const stored = sessionStorage.getItem('pccm_firestore_quota_exceeded') || localStorage.getItem('pccm_firestore_quota_exceeded');
+        // Xóa sạch key cũ nếu từng bị lưu dính trong localStorage
+        localStorage.removeItem('pccm_firestore_quota_exceeded');
+        const stored = sessionStorage.getItem('pccm_firestore_quota_exceeded');
         if (stored && Number(stored) > Date.now()) {
           _isQuotaExceeded = true;
           _quotaExceededUntil = Number(stored);
@@ -191,18 +193,10 @@ export function resetQuotaExceeded(): void {
   } catch {}
 }
 
-// Kiểm tra ngay khi khởi tạo module để ngắt mạng ngay lập tức nếu đang trong thời gian quota cooldown
+// Xóa sạch các cờ quota tồn đọng trong localStorage khi khởi tạo module
 if (typeof window !== 'undefined') {
   try {
-    const initStored = sessionStorage.getItem('pccm_firestore_quota_exceeded') || localStorage.getItem('pccm_firestore_quota_exceeded');
-    if (initStored && Number(initStored) > Date.now()) {
-      _isQuotaExceeded = true;
-      _quotaExceededUntil = Number(initStored);
-      try {
-        setLogLevel('silent');
-        disableNetwork(db).catch(() => {});
-      } catch {}
-    }
+    localStorage.removeItem('pccm_firestore_quota_exceeded');
   } catch {}
 }
 
@@ -622,7 +616,7 @@ export class FirestoreRepository {
     },
     onProgress?: (step: string, percent: number) => void
   ): Promise<{ success: boolean; totalCount: number; message: string }> {
-    const sId = schoolId || 'school_quyhop';
+    const sId = schoolId || 'school_admin';
     let totalItems = 0;
 
     if (isQuotaExceeded()) {
@@ -722,7 +716,7 @@ export class FirestoreRepository {
       const sanitized = sanitizeForFirestore({
         ...license,
         id: sId,
-        assignedPasswordHint: license.assignedPasswordHint?.trim() || (sId === 'school_quyhop' ? '123456' : ''),
+        assignedPasswordHint: license.assignedPasswordHint?.trim() || (sId === 'school_quyhop' || sId === 'school_admin' ? '123456' : ''),
         updatedAt: new Date().toISOString(),
       });
       batch.set(licRef, sanitized, { merge: true });
@@ -830,7 +824,7 @@ export class FirestoreRepository {
       const snap = await getDocs(colRef);
       return snap.docs.map((d) => {
         const raw = d.data() as any;
-        const isAdm = d.id === 'school_quyhop' || d.id === 'school_admin' || (raw.schoolName && raw.schoolName.toUpperCase().includes('QUỲ HỢP'));
+        const isAdm = d.id === 'school_quyhop' || d.id === 'school_admin';
         return {
           ...raw,
           id: isAdm ? 'school_admin' : d.id,

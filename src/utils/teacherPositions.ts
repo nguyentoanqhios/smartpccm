@@ -377,10 +377,12 @@ export function getTeacherPositions(
   const seenHomeroomClasses = new Set<string>();
 
   for (const pos of filtered) {
-    const match = pos.match(/^Chủ nhiệm lớp\s+(?:lớp\s+)?(.+)$/i);
-    if (match) {
-      const clsKey = match[1].trim().toUpperCase();
-      if (!seenHomeroomClasses.has(clsKey)) {
+    // Bắt trọn mọi biến thể: "Chủ nhiệm lớp 6A3", "Chủ nhiệm lớp LỚP 6A3", "Chủ nhiệm 6A3", "GVCN 6A3", "Chủ nhiệm Lớp 6A3"
+    const hrMatch = /^(?:chủ nhiệm(?:\s+lớp)?|gvcn)\s+(.+)$/i.exec(pos);
+    if (hrMatch) {
+      let clsKey = hrMatch[1].trim().toUpperCase();
+      clsKey = clsKey.replace(/^(?:lớp|lop)\s*/i, '').trim();
+      if (clsKey && !seenHomeroomClasses.has(clsKey)) {
         seenHomeroomClasses.add(clsKey);
         finalPositions.push(`Chủ nhiệm lớp ${clsKey}`);
       }

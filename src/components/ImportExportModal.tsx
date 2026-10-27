@@ -86,8 +86,8 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
   const [cloudPullProgress, setCloudPullProgress] = useState('');
   const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [cloudPushProgress, setCloudPushProgress] = useState('');
-  const [cloudTargetSchool, setCloudTargetSchool] = useState<string>(() => dataStore.getSchoolId() || 'school_quyhop');
-  const currentSchoolId = dataStore.getSchoolId() || 'school_quyhop';
+  const [cloudTargetSchool, setCloudTargetSchool] = useState<string>(() => dataStore.getSchoolId() || 'school_admin');
+  const currentSchoolId = dataStore.getSchoolId() || 'school_admin';
 
   const handlePushToCloud = async () => {
     setIsPushingCloud(true);
@@ -121,7 +121,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
   };
 
   const handlePullFromCloud = async (targetId?: string) => {
-    const sId = targetId || cloudTargetSchool || dataStore.getSchoolId() || 'school_quyhop';
+    const sId = targetId || cloudTargetSchool || dataStore.getSchoolId() || 'school_admin';
     setIsPullingCloud(true);
     setCloudPullProgress('Đang xác thực kết nối Cloud Firestore...');
     try {
