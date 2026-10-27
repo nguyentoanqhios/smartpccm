@@ -1328,7 +1328,6 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                   <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
                   <span className="hidden sm:inline">Phân công thông minh</span>
                   <span className="sm:hidden">Thông minh</span>
-                  <span className="px-1.5 py-0.5 text-[9px] bg-amber-400 text-slate-900 rounded font-black tracking-wider uppercase">MỚI</span>
                 </button>
 
                 <button
@@ -2655,7 +2654,7 @@ export const AssignmentTableView: React.FC<AssignmentTableViewProps> = ({
                 <button
                   onClick={() => setIsModalOpen(false)}
                   className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-                  title="Đóng (Esc)"
+                  title="Đóng"
                 >
                   <X className="w-5 h-5" />
                 </button>

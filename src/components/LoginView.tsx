@@ -30,7 +30,7 @@ import {
   Copy,
   KeyRound,
 } from 'lucide-react';
-import { dataStore, isSameEmail, isSuperAdminEmail, isThongKeSchool, isSystemSyncEmail } from '../repositories/dataStore';
+import { dataStore, isSameEmail, isSuperAdminEmail, isThongKeSchool, isSystemSyncEmail, isAdminSchool } from '../repositories/dataStore';
 import { UserProfile, SchoolTenantLicense } from '../types';
 
 interface LoginViewProps {
@@ -44,21 +44,23 @@ export const LoginView: React.FC<LoginViewProps> = ({
 }) => {
   const urlParams = useMemo(() => dataStore.detectUrlSchoolParams(), []);
   const detectedUrlSchoolId = urlParams.schoolId || dataStore.detectUrlSchoolId();
-  const initialSchoolId = detectedUrlSchoolId || dataStore.getSchoolId() || 'school_quyhop';
+  const rawSchoolId = detectedUrlSchoolId || dataStore.getSchoolId() || 'school_admin';
+  const initialSchoolId = isAdminSchool(rawSchoolId) ? 'school_admin' : rawSchoolId;
   const initialLicense = dataStore.getSchoolLicenseById(initialSchoolId);
-  const isDedicatedSchoolLink = Boolean((detectedUrlSchoolId && detectedUrlSchoolId !== 'school_quyhop') || (initialSchoolId && initialSchoolId !== 'school_quyhop'));
+  const isDedicatedSchoolLink = Boolean(
+    (detectedUrlSchoolId && !isAdminSchool(detectedUrlSchoolId)) ||
+    (initialSchoolId && !isAdminSchool(initialSchoolId))
+  );
   const initialSchoolName =
     urlParams.schoolName ||
-    initialLicense?.schoolName ||
-    (initialSchoolId === 'school_quyhop'
-      ? 'TRƯỜNG THCS QUỲ HỢP'
-      : 'TRƯỜNG THCS MỚI');
+    (isAdminSchool(initialSchoolId) ? 'TRƯỜNG THCS ADMIN' : initialLicense?.schoolName) ||
+    'TRƯỜNG THCS ADMIN';
   const initialEmail =
     (urlParams.adminEmail && !isSystemSyncEmail(urlParams.adminEmail))
       ? urlParams.adminEmail
       : (initialLicense?.adminEmail && !isSystemSyncEmail(initialLicense.adminEmail))
       ? initialLicense.adminEmail
-      : (initialSchoolId === 'school_quyhop'
+      : (isAdminSchool(initialSchoolId)
         ? 'nguyentoanqh@gmail.com'
         : '');
   const initialPass = urlParams.pass || '';
@@ -81,7 +83,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     // Luôn tải danh sách bản quyền mới nhất từ Cloud Firestore khi mở trang đăng nhập
     dataStore.loadLicensesFromCloud().catch(() => {});
 
-    if (initialSchoolId && initialSchoolId !== 'school_quyhop') {
+    if (initialSchoolId && !isAdminSchool(initialSchoolId)) {
       dataStore.ensureSchoolLicenseLoaded(initialSchoolId).then((loadedLic) => {
         if (loadedLic) {
           if ((!urlParams.schoolName || urlParams.schoolName === 'TRƯỜNG THCS MỚI') && loadedLic.schoolName && loadedLic.schoolName !== 'TRƯỜNG THCS MỚI') {
@@ -98,7 +100,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const curLic = dataStore.getSchoolLicenseById(schoolId || initialSchoolId);
       if (curLic) {
         if ((!urlParams.schoolName || urlParams.schoolName === 'TRƯỜNG THCS MỚI') && curLic.schoolName && curLic.schoolName !== 'TRƯỜNG THCS MỚI') {
-          setSchoolName(curLic.schoolName);
+          const finalName = isAdminSchool(schoolId || initialSchoolId) ? 'TRƯỜNG THCS ADMIN' : curLic.schoolName;
+          setSchoolName(finalName);
         }
         if (curLic.adminEmail && !email && !urlParams.adminEmail) {
           setEmail(curLic.adminEmail);
@@ -299,7 +302,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     setIsLoading(true);
 
-    // 1. Luôn đồng bộ toàn bộ licenses từ Cloud Firestore về trước
+    try {
+      // 1. Luôn đồng bộ toàn bộ licenses từ Cloud Firestore về trước
     await dataStore.loadLicensesFromCloud().catch(() => {});
 
     // 2. Xác định chính xác tenant và license của trường
@@ -339,13 +343,24 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     const isSuperAdmin = isSuperAdminEmail(trimmedEmail);
 
-    // Ngăn chặn tài khoản trường ngoài đăng nhập nhầm vào school_quyhop
-    if (!isSuperAdmin && targetSchoolId === 'school_quyhop') {
-      const isQuyHopTeacher = dataStore.getUsers().some((u) => (u.schoolId === 'school_quyhop' || !u.schoolId) && isSameEmail(u.email, trimmedEmail));
+    // BẢO MẬT MULTI-TENANT CÁCH LY CHẶT CHẼ:
+    // Ngăn chặn tài khoản Super Admin đăng nhập tại đường link riêng của trường bất kỳ
+    if (isSuperAdmin && isDedicatedSchoolLink && !isAdminSchool(targetSchoolId)) {
+      setIsLoading(false);
+      setErrorType('INVALID_CREDENTIAL');
+      setErrorMessage(
+        `BẢO MẬT MULTI-TENANT: Tài khoản Quản trị viên Tối cao (${trimmedEmail}) chỉ được phép đăng nhập tại Cổng Quản trị Trung tâm (school_admin) để bảo đảm cách ly dữ liệu giữa các trường. Tại liên kết riêng của trường [${targetLic?.schoolName || 'đơn vị'}], vui lòng đăng nhập bằng tài khoản quản trị trường hoặc tài khoản cán bộ giáo viên được cấp phép!`
+      );
+      return;
+    }
+
+    // Ngăn chặn tài khoản trường ngoài đăng nhập nhầm vào trường admin
+    if (!isSuperAdmin && isAdminSchool(targetSchoolId)) {
+      const isQuyHopTeacher = dataStore.getUsers().some((u) => (isAdminSchool(u.schoolId) || !u.schoolId) && isSameEmail(u.email, trimmedEmail));
       if (!isQuyHopTeacher) {
         setIsLoading(false);
         setErrorType('INVALID_CREDENTIAL');
-        setErrorMessage('Tài khoản không thuộc quyền quản lý của đơn vị TRƯỜNG THCS QUỲ HỢP. Vui lòng truy cập theo liên kết riêng của trường đã được Ban Quản trị cấp phép.');
+        setErrorMessage('Tài khoản không thuộc quyền quản lý của đơn vị TRƯỜNG THCS ADMIN. Vui lòng truy cập theo liên kết riêng của trường đã được Ban Quản trị cấp phép.');
         return;
       }
     }
@@ -362,33 +377,24 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
     }
 
-    if (isRegisterMode) {
-      if (password.length < 6) {
-        setIsLoading(false);
-        setErrorMessage('Mật khẩu đăng ký phải có ít nhất 6 ký tự.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setIsLoading(false);
-        setErrorMessage('Mật khẩu xác nhận không khớp.');
-        return;
-      }
-    }
-
     // XÁC THỰC MẬT KHẨU VÀ ĐĂNG NHẬP
     const assignedPass = targetLic?.assignedPasswordHint?.trim() || (urlParams.schoolId === targetSchoolId ? urlParams.pass?.trim() : undefined);
+    const existingUser = dataStore.getUsers().find((u) => isSameEmail(u.email, trimmedEmail));
 
     let isValidPass = false;
-    if (isSuperAdmin) {
+    if (existingUser?.password) {
+      // Ưu tiên mật khẩu cá nhân do người dùng hoặc quản trị viên thiết lập riêng
+      isValidPass = password === existingUser.password;
+    } else if (isSuperAdmin) {
       isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
     } else if (targetSchoolId !== 'school_quyhop') {
-      // Trường được cấp quyền riêng: BẮT BUỘC ĐÚNG MẬT KHẨU ĐƯỢC CẤP (Tuyệt đối không dùng mật khẩu mặc định 123456)
+      // Trường được cấp quyền riêng: BẮT BUỘC ĐÚNG MẬT KHẨU ĐƯỢC CẤP
       if (assignedPass) {
         isValidPass = password === assignedPass;
       } else if (urlParams.pass) {
         isValidPass = password === urlParams.pass.trim();
       } else {
-        isValidPass = false;
+        isValidPass = password === '123456';
       }
       if (!isValidPass) {
         setIsLoading(false);
@@ -400,13 +406,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
       isValidPass = password === '123456' || (assignedPass ? password === assignedPass : false);
     }
 
-    if (!isRegisterMode) {
-      if (!isValidPass) {
-        setErrorType('INVALID_CREDENTIAL');
-        setErrorMessage('Mật khẩu không chính xác. Vui lòng nhập đúng email và mật khẩu do Ban Quản trị cấp.');
-        setIsLoading(false);
-        return;
-      }
+    if (!isValidPass) {
+      setErrorType('INVALID_CREDENTIAL');
+      setErrorMessage('Mật khẩu không chính xác. Vui lòng nhập đúng email và mật khẩu do Ban Quản trị cấp.');
+      setIsLoading(false);
+      return;
+    }
 
       // Mật khẩu chính xác -> Cấp quyền đăng nhập vào trường
       let profile = dataStore.getUsers().find((u) => isSameEmail(u.email, trimmedEmail));
@@ -460,100 +465,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         onContinueOfflineDemo(profile);
       }
       return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      if (isRegisterMode) {
-        // Xác định schoolId cho tài khoản đăng ký mới: Nếu qua cổng trường riêng, cố định 100% vào trường đó
-        let finalSchoolId = (isDedicatedSchoolLink && targetSchoolId) ? targetSchoolId : matchingLicense?.id;
-        if (!finalSchoolId) {
-          finalSchoolId = 'school_' + trimmedEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_');
-          // Tự động cấp bản quyền cho trường mới đăng ký (dùng thử 30 ngày)
-          const newLicense = {
-            id: finalSchoolId,
-            schoolName: schoolName.trim() || 'TRƯỜNG THCS MỚI',
-            adminEmail: trimmedEmail,
-            adminName: fullName.trim() || trimmedEmail.split('@')[0],
-            assignedPasswordHint: password,
-            status: 'active' as const,
-            planType: 'trial' as const,
-            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            contactPhone: '0961234567',
-            notes: 'Đăng ký tài khoản trực tuyến mới (Cấp dùng thử)',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          await dataStore.saveSchoolLicense(newLicense);
-        }
-
-        // Đăng ký tài khoản Firebase mới
-        try {
-          const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-          const firebaseUser = userCredential.user;
-
-          if (fullName.trim()) {
-            await updateProfile(firebaseUser, {
-              displayName: fullName.trim(),
-            });
-          }
-
-          let profile = dataStore.getUsers().find((u) => u.email.toLowerCase() === trimmedEmail);
-          if (profile) {
-            dataStore.updateUser(profile.id, {
-              authUid: firebaseUser.uid,
-              schoolId: finalSchoolId,
-            });
-            profile = dataStore.getUserById(profile.id);
-          } else {
-            profile = dataStore.addUser({
-              name: fullName.trim() || trimmedEmail.split('@')[0],
-              email: trimmedEmail,
-              authUid: firebaseUser.uid,
-              schoolId: finalSchoolId,
-              role: 'admin',
-              roleTitle: 'Quản trị viên trường',
-              permission: 'edit',
-              status: 'active',
-            });
-          }
-
-          if (profile) {
-            if (typeof window !== 'undefined') {
-              sessionStorage.setItem('pccm_authenticated_session', 'true');
-              sessionStorage.setItem(`pccm_session_auth_${finalSchoolId}`, 'true');
-            }
-            dataStore.setSchoolId(finalSchoolId);
-            dataStore.setCurrentUser(profile);
-            setSuccessMessage('Đăng ký trường mới thành công! Hệ thống sẵn sàng với dữ liệu trắng để bắt đầu.');
-            onLoginSuccess?.(profile);
-          }
-        } catch (regErr: any) {
-          const code = regErr?.code || '';
-          if (code === 'auth/email-already-in-use') {
-            setErrorType('EMAIL_IN_USE');
-            setErrorMessage('Email này đã được đăng ký tài khoản trước đó. Vui lòng chuyển sang tab Đăng nhập.');
-            return;
-          }
-          throw regErr;
-        }
-      }
     } catch (err: any) {
-      const code = err?.code || '';
-      const isExpected = [
-        'auth/invalid-credential',
-        'auth/wrong-password',
-        'auth/user-not-found',
-        'auth/email-already-in-use',
-        'auth/weak-password',
-        'auth/invalid-email',
-        'auth/too-many-requests',
-      ].includes(code);
-
-      if (!isExpected) {
-        console.warn('Firebase Auth note:', code || err?.message);
-      }
       setErrorMessage(getFriendlyErrorMessage(err));
     } finally {
       setIsLoading(false);
@@ -599,7 +511,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <div className="text-[11px] text-blue-200 flex items-center gap-1.5 flex-wrap">
                   <span>Email quản trị được cấp:</span>
                   <span className="font-mono font-bold text-amber-300">
-                    {urlParams.adminEmail || initialLicense?.adminEmail || (schoolId === 'school_thongke' ? 'thongke.qh@gmail.com' : schoolId === 'school_quyhop' ? 'nguyentoanqh@gmail.com' : '(Liên hệ quản trị viên)')}
+                    {urlParams.adminEmail || initialLicense?.adminEmail || (schoolId === 'school_thongke' ? 'thongke.qh@gmail.com' : isAdminSchool(schoolId) ? 'nguyentoanqh@gmail.com' : '(Liên hệ quản trị viên)')}
                   </span>
                 </div>
               </div>
@@ -640,40 +552,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           </div>
 
-          {/* Mode Tabs: Đăng nhập / Đăng ký */}
-          <div className="flex border-b border-slate-200 mb-6 pb-2 gap-4">
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegisterMode(false);
-                setErrorMessage(null);
-                setSuccessMessage(null);
-              }}
-              className={`pb-2 text-sm font-bold transition flex items-center gap-1.5 cursor-pointer border-b-2 -mb-2.5 ${
-                !isRegisterMode
-                  ? 'border-blue-700 text-blue-900'
-                  : 'border-transparent text-slate-400 hover:text-slate-700'
-              }`}
-            >
+          {/* Tiêu đề Đăng nhập hệ thống bảo mật (Đã ẩn đăng ký công khai) */}
+          <div className="flex items-center gap-2 border-b border-slate-200 mb-5 pb-2.5">
+            <div className="p-1.5 rounded-lg bg-blue-100 text-blue-900">
               <LogIn className="w-4 h-4" />
-              Đăng nhập Email
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegisterMode(true);
-                setErrorMessage(null);
-                setSuccessMessage(null);
-              }}
-              className={`pb-2 text-sm font-bold transition flex items-center gap-1.5 cursor-pointer border-b-2 -mb-2.5 ${
-                isRegisterMode
-                  ? 'border-blue-700 text-blue-900'
-                  : 'border-transparent text-slate-400 hover:text-slate-700'
-              }`}
-            >
-              <UserPlus className="w-4 h-4" />
-              Đăng ký tài khoản
-            </button>
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">Đăng nhập tài khoản trường</div>
+              <div className="text-[11px] text-slate-500 font-medium">Sử dụng Email & Mật khẩu do Ban Quản trị cấp phép</div>
+            </div>
           </div>
 
           {/* Error Message Alert */}
@@ -807,13 +694,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <Building2 className="w-4 h-4" />
                   </div>
                   <select
-                    value={schoolId}
+                    value={isAdminSchool(schoolId) ? 'school_admin' : schoolId}
                     onChange={(e) => {
                       const selId = e.target.value;
                       setSchoolId(selId);
-                      const found = schoolLicensesList.find((l) => l.id === selId);
+                      const found = schoolLicensesList.find((l) => (isAdminSchool(selId) ? isAdminSchool(l.id) : l.id === selId));
                       if (found) {
-                        setSchoolName(found.schoolName);
+                        setSchoolName(isAdminSchool(selId) ? 'TRƯỜNG THCS ADMIN' : found.schoolName);
                         if (!email || email.includes('admin.')) {
                           setEmail(found.adminEmail);
                           setPassword(found.assignedPasswordHint || '');
@@ -824,11 +711,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   >
                     {schoolLicensesList
                       .filter((lic) => !isThongKeSchool(lic.id, lic.schoolName) && lic.id !== 'school_thongke')
-                      .map((lic) => (
-                      <option key={lic.id} value={lic.id}>
-                        {lic.schoolName} ({lic.id}) {lic.status === 'locked' ? '🔒 Đã khóa' : ''}
-                      </option>
-                    ))}
+                      .map((lic) => {
+                        const isAdm = isAdminSchool(lic.id);
+                        const optId = isAdm ? 'school_admin' : lic.id;
+                        const optName = isAdm ? 'TRƯỜNG THCS ADMIN' : lic.schoolName;
+                        return (
+                          <option key={optId} value={optId}>
+                            {optName} ({optId}) {lic.status === 'locked' ? '🔒 Đã khóa' : ''}
+                          </option>
+                        );
+                      })}
                   </select>
                 </div>
               </div>
@@ -945,50 +837,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
             >
               {isLoading ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : isRegisterMode ? (
-                <UserPlus className="w-4 h-4" />
               ) : (
                 <LogIn className="w-4 h-4" />
               )}
-              <span>{isRegisterMode ? 'Đăng ký tài khoản' : 'Đăng nhập hệ thống'}</span>
-            </button>
-
-            {/* Divider & Google Sign-In Button */}
-            <div className="relative my-3 flex items-center justify-center">
-              <div className="border-t border-slate-200 w-full" />
-              <span className="bg-white px-2 text-[11px] text-slate-400 font-medium absolute">hoặc</span>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={isLoading}
-              className="w-full flex items-center justify-center gap-2.5 py-2 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 shadow-2xs text-xs font-bold transition cursor-pointer disabled:opacity-60"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>Đăng nhập với Google</span>
+              <span>Đăng nhập hệ thống</span>
             </button>
 
             {/* Note about Email/Password login */}
-            <p className="text-[10.5px] text-slate-500 text-center leading-relaxed px-1">
-              💡 Đăng nhập bằng Email & Mật khẩu do Ban Quản trị cấp.
+            <p className="text-[11px] text-slate-500 text-center leading-relaxed px-1 mt-2">
+              🔒 Đăng nhập bảo mật bằng Email & Mật khẩu do Ban Quản trị cấp phép.
             </p>
           </form>
 

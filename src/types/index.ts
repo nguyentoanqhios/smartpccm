@@ -63,6 +63,7 @@ export interface UserProfile {
   id: string;
   name: string;
   email: string;
+  password?: string; // Mật khẩu đăng nhập cá nhân
   authUid?: string;
   schoolId?: string;
   role: UserRole;

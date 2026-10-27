@@ -37,7 +37,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { SchoolTenantLicense, LicensePlanType, UserProfile, SchoolClass, Teacher } from '../types';
-import { dataStore } from '../repositories/dataStore';
+import { dataStore, isAdminSchool } from '../repositories/dataStore';
 import { firestoreRepository } from '../repositories/firestoreRepository';
 import { ensureFirebaseAuth, withTimeout } from '../firebase/config';
 
@@ -180,7 +180,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
   // BẢN CẤP QUYỀN CHO TRƯỜNG HỌC: Chỉ hiển thị các trường đối tác được cấp quyền, KHÔNG hiển thị trường gốc Quỳ Hợp
   const partnerLicenses = useMemo(() => {
-    return licenses.filter((l) => l.id !== 'school_quyhop');
+    return licenses.filter((l) => !isAdminSchool(l.id));
   }, [licenses]);
 
   // Filtered Licenses
@@ -250,7 +250,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
           await dataStore.loadLicensesFromCloud();
           const lics = dataStore.getSchoolLicenses();
           for (const lic of lics) {
-            if (lic.id !== 'school_quyhop') {
+            if (!isAdminSchool(lic.id)) {
               await dataStore.pullDataFromFirestore(lic.id).catch(() => {});
             }
           }
@@ -469,7 +469,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
     // Always generate complete school ID from full school name if not editing
     const rawId = formSchoolId.trim() || generateSchoolId(formSchoolName);
-    const sId = editingLicense ? editingLicense.id : (rawId === 'school_quyhop' ? `school_quyhop_${Math.random().toString(36).substring(2, 6)}` : rawId);
+    const sId = editingLicense ? editingLicense.id : (isAdminSchool(rawId) ? `${rawId}_${Math.random().toString(36).substring(2, 6)}` : rawId);
 
     const newLicense: SchoolTenantLicense = {
       id: sId,
@@ -1452,7 +1452,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                   </button>
 
                   {/* Delete (Cannot delete master default school) */}
-                  {lic.id !== 'school_quyhop' && (
+                  {!isAdminSchool(lic.id) && (
                     <button
                       type="button"
                       onClick={() => setDeleteConfirmLicense(lic)}
@@ -1954,11 +1954,10 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
               <button
                 type="button"
                 onClick={() => setHandoverModalLicense(null)}
-                className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
-                title="Đóng (phím Esc)"
+                className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-2 rounded-xl transition flex items-center justify-center text-xs font-bold cursor-pointer"
+                title="Đóng"
               >
                 <span>✕</span>
-                <span className="hidden sm:inline text-[10px] bg-white/20 px-1.5 py-0.5 rounded font-mono">Esc</span>
               </button>
             </div>
 
@@ -1975,9 +1974,6 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                       HƯỚNG DẪN 4 BƯỚC CẬP NHẬT MÃ NGUỒN & PHÁT HÀNH CHO CÁC TRƯỜNG
                     </h4>
                   </div>
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    Bấm phím <kbd className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-mono text-[10px]">Esc</kbd> để thoát bảng
-                  </span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
@@ -2142,10 +2138,9 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
                 <button
                   type="button"
                   onClick={() => setHandoverModalLicense(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200 transition flex items-center gap-1"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200 transition flex items-center"
                 >
                   <span>Đóng</span>
-                  <span className="text-[10px] text-slate-400 font-mono">(Esc)</span>
                 </button>
                 <button
                   type="button"

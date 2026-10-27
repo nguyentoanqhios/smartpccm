@@ -498,6 +498,7 @@ export function generateReportBySession(
       fullName: string;
       departmentName?: string;
       workplace?: string;
+      email?: string;
       periods: number;
       morningPeriods: number;
       afternoonPeriods: number;
@@ -524,6 +525,7 @@ export function generateReportBySession(
             id: t.id,
             code: t.code,
             fullName: t.fullName,
+            email: t.email,
             departmentName: (t.departmentId ? deptMap.get(t.departmentId) : '') || 'Chưa xếp tổ',
             workplace: t.workplace,
             periods: stat.morningPeriods,
@@ -551,6 +553,7 @@ export function generateReportBySession(
             id: t.id,
             code: t.code,
             fullName: t.fullName,
+            email: t.email,
             departmentName: (t.departmentId ? deptMap.get(t.departmentId) : '') || 'Chưa xếp tổ',
             workplace: t.workplace,
             periods: stat.afternoonPeriods,
@@ -613,6 +616,7 @@ export function generateReportBySession(
           id: t.id,
           code: t.code,
           fullName: t.fullName,
+          email: t.email,
           departmentName: (t.departmentId ? deptMap.get(t.departmentId) : '') || 'Chưa xếp tổ',
           workplace: t.workplace,
           periods: stat.morningPeriods + stat.afternoonPeriods + stat.fullDayPeriods,
@@ -648,6 +652,7 @@ export function generateReportBySession(
             id: t.id,
             code: t.code,
             fullName: t.fullName,
+            email: t.email,
             departmentName: (t.departmentId ? deptMap.get(t.departmentId) : '') || 'Chưa xếp tổ',
             workplace: t.workplace,
             periods: stat.activityPeriods,

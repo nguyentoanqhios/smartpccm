@@ -1407,6 +1407,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                     <th className="py-2.5 px-2 text-center w-10">STT</th>
                     <th className="py-2.5 px-3">Mã GV</th>
                     <th className="py-2.5 px-4">Họ và tên</th>
+                    <th className="py-2.5 px-3">Email</th>
                     <th className="py-2.5 px-3">Điểm trường</th>
                     <th className="py-2.5 px-3">Tổ CM</th>
                     <th className="py-2.5 px-2 text-center">Buổi 1 (Sáng)</th>
@@ -1454,7 +1455,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                         <React.Fragment key={dept.id}>
                           {/* Department Section Header */}
                           <tr className="bg-emerald-50/80 border-t-2 border-emerald-200">
-                            <td colSpan={14} className="py-2 px-3">
+                            <td colSpan={15} className="py-2 px-3">
                               <div className="flex items-center justify-between font-bold text-emerald-950">
                                 <span className="flex items-center gap-2 text-xs uppercase tracking-wide">
                                   <Users className="w-4 h-4 text-emerald-800" />
@@ -1480,6 +1481,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                                 <td className="py-2 px-2 text-center text-slate-400 font-medium">{i + 1}</td>
                                 <td className="py-2 px-3 font-mono font-bold text-slate-600">{c.teacherCode}</td>
                                 <td className="py-2 px-4 font-bold text-slate-900">{c.teacherName}</td>
+                                <td className="py-2 px-3 text-slate-500 font-mono text-[11px]">{tObj?.email || '-'}</td>
                                 <td className="py-2 px-3">
                                   <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border bg-slate-50 border-slate-200 text-slate-700">
                                     <Building2 className="w-2.5 h-2.5" />
@@ -1532,7 +1534,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
 
                           {/* Subtotal row for this department */}
                           <tr className="bg-emerald-50/40 font-bold text-slate-800 border-b border-emerald-200 text-[11px]">
-                            <td colSpan={5} className="py-2 px-3 text-right text-emerald-900 uppercase font-black">
+                            <td colSpan={6} className="py-2 px-3 text-right text-emerald-900 uppercase font-black">
                               Cộng {dept.name || dept.fullName}:
                             </td>
                             <td className="py-2 px-2 text-center">{deptMorning}</td>
@@ -1571,6 +1573,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                             <td className="py-2.5 px-2 text-center text-slate-400 font-medium">{i + 1}</td>
                             <td className="py-2.5 px-3 font-mono font-bold text-slate-600">{c.teacherCode}</td>
                             <td className="py-2.5 px-4 font-bold text-slate-900">{c.teacherName}</td>
+                            <td className="py-2.5 px-3 text-slate-500 font-mono text-[11px]">{tObj?.email || '-'}</td>
                             <td className="py-2.5 px-3">
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border bg-slate-50 border-slate-200 text-slate-700">
                                 <Building2 className="w-2.5 h-2.5" />
@@ -1623,7 +1626,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                   )}
                   {/* Summary row */}
                   <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300">
-                    <td colSpan={5} className="py-3 px-3 text-center uppercase tracking-wider">
+                    <td colSpan={6} className="py-3 px-3 text-center uppercase tracking-wider">
                       TỔNG CỘNG ({selectedDepartmentId === 'ALL' ? branchDisplayName : `${departmentScopeName.toUpperCase()} – ${branchDisplayName}`})
                     </td>
                     <td className="py-3 px-2 text-center">{schoolKpi.totalMorningPeriods}</td>
@@ -1692,7 +1695,14 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                     <div>
                       <div className="text-[10px] text-slate-400 uppercase font-bold">Họ và tên giáo viên:</div>
                       <div className="text-base font-black text-slate-900 mt-0.5">{activeReport2Teacher.fullName}</div>
-                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">Mã GV: {activeReport2Teacher.code}</div>
+                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                        Mã GV: {activeReport2Teacher.code}
+                        {activeReport2Teacher.email && (
+                          <span className="ml-2 font-normal text-blue-700 font-mono">
+                            • {activeReport2Teacher.email}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <div className="text-[10px] text-slate-400 uppercase font-bold">Chuyên môn & Đơn vị:</div>
@@ -2908,6 +2918,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                                             <th className="py-2 px-2.5 text-center w-10">TT</th>
                                             <th className="py-2 px-2.5 w-20">Mã GV</th>
                                             <th className="py-2 px-3">Họ và tên</th>
+                                            <th className="py-2 px-3">Email</th>
                                             <th className="py-2 px-3">Tổ chuyên môn</th>
                                             <th className="py-2 px-2.5 text-center">Tiết Sáng</th>
                                             <th className="py-2 px-2.5 text-center">Tiết Chiều</th>
@@ -2933,6 +2944,7 @@ export const ReportsAnalyticsView: React.FC<ReportsAnalyticsViewProps> = ({
                                                   {t.fullName}
                                                 </button>
                                               </td>
+                                              <td className="py-2 px-3 text-slate-500 font-mono text-[11px]">{t.email || '-'}</td>
                                               <td className="py-2 px-3 text-slate-600">{t.departmentName || 'Chưa xếp tổ'}</td>
                                               <td className="py-2 px-2.5 text-center font-semibold text-amber-800">
                                                 {t.morningPeriods}t

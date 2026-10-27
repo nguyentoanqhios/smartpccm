@@ -134,6 +134,7 @@ export type TeacherColumnKey =
   | 'code'
   | 'fullName'
   | 'timetableName'
+  | 'email'
   | 'birthDate'
   | 'startYear'
   | 'initialDegree'
@@ -157,6 +158,7 @@ const TEACHER_COLUMN_DEFINITIONS: ColumnDefinition[] = [
   { id: 'code', label: 'Mã giáo viên' },
   { id: 'fullName', label: 'Họ và tên giáo viên' },
   { id: 'timetableName', label: 'Tên TKB (Thời khóa biểu)' },
+  { id: 'email', label: 'Email giáo viên' },
   { id: 'birthDate', label: 'Ngày sinh' },
   { id: 'startYear', label: 'Năm vào ngành' },
   { id: 'initialDegree', label: 'Trình độ CM ban đầu' },
@@ -176,6 +178,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<TeacherColumnKey, boolean> = {
   code: true,
   fullName: true,
   timetableName: true,
+  email: true,
   birthDate: true,
   startYear: true,
   initialDegree: true,
@@ -1798,6 +1801,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                   {visibleColumns.code && <th className="py-3.5 px-3 text-center w-20">Mã GV</th>}
                   {visibleColumns.fullName && <th className="py-3.5 px-4 font-bold min-w-[150px]">Họ và tên giáo viên</th>}
                   {visibleColumns.timetableName && <th className="py-3.5 px-3 text-center min-w-[90px] whitespace-nowrap">Tên TKB</th>}
+                  {visibleColumns.email && <th className="py-3.5 px-3 min-w-[150px]">Email</th>}
                   {visibleColumns.birthDate && <th className="py-3.5 px-3 text-center min-w-[95px] whitespace-nowrap">Ngày sinh</th>}
                   {visibleColumns.startYear && <th className="py-3.5 px-3 text-center min-w-[90px] whitespace-nowrap">Năm vào ngành</th>}
                   {visibleColumns.initialDegree && <th className="py-3.5 px-3 min-w-[130px] whitespace-nowrap">Trình độ CM ban đầu</th>}
@@ -1868,6 +1872,20 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                           >
                             {teacher.timetableName || teacher.shortName || (teacher.fullName ? teacher.fullName.trim().split(/\s+/).pop() : '')}
                           </span>
+                        </td>
+                      )}
+
+                      {/* Email */}
+                      {visibleColumns.email && (
+                        <td className="py-3 px-3 text-slate-700 text-[11px] font-mono">
+                          {teacher.email ? (
+                            <span className="flex items-center gap-1.5 text-slate-700">
+                              <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              <span className="truncate max-w-[170px]" title={teacher.email}>{teacher.email}</span>
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic">Chưa có</span>
+                          )}
                         </td>
                       )}
 

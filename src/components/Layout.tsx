@@ -36,6 +36,8 @@ import {
   ShieldCheck,
   Edit3,
   Eye,
+  EyeOff,
+  KeyRound,
   Sliders,
   PanelLeftClose,
   PanelLeftOpen,
@@ -49,7 +51,7 @@ import {
   Save,
   RotateCcw,
 } from 'lucide-react';
-import { dataStore, isSuperAdminEmail, isThongKeSchool } from '../repositories/dataStore';
+import { dataStore, isSuperAdminEmail, isThongKeSchool, isAdminSchool } from '../repositories/dataStore';
 import { auth } from '../firebase/config';
 import { UserProfile, SemesterId, AssignmentVersion } from '../types';
 import { toastService, ToastSettings } from '../services/toastService';
@@ -134,6 +136,16 @@ export const Layout: React.FC<LayoutProps> = ({
   const [isExitPromptOpen, setIsExitPromptOpen] = useState(false);
   const [pendingNavTab, setPendingNavTab] = useState<ActiveTab | null>(null);
   const [isTabSwitchPromptOpen, setIsTabSwitchPromptOpen] = useState(false);
+
+  // User self-service change password modal states
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [selfOldPassword, setSelfOldPassword] = useState('');
+  const [selfNewPassword, setSelfNewPassword] = useState('');
+  const [selfConfirmPassword, setSelfConfirmPassword] = useState('');
+  const [showSelfOldPwd, setShowSelfOldPwd] = useState(false);
+  const [showSelfNewPwd, setShowSelfNewPwd] = useState(false);
+  const [selfPwdError, setSelfPwdError] = useState<string | null>(null);
+  const [selfPwdSuccess, setSelfPwdSuccess] = useState<string | null>(null);
 
   const handleNavTabClick = (targetTab: string) => {
     if (targetTab === 'version-backups') {
@@ -342,13 +354,13 @@ export const Layout: React.FC<LayoutProps> = ({
                         <Building2 className="w-3.5 h-3.5 text-purple-700 shrink-0" />
                         <select
                           id="header-school-selector"
-                          value={currentSchoolId}
+                          value={isAdminSchool(currentSchoolId) ? 'school_admin' : currentSchoolId}
                           onChange={(e) => {
                             const val = e.target.value;
                             dataStore.setSchoolId(val);
                             setCurrentSchoolId(val);
                             const targetLic = dataStore.getSchoolLicenseById(val);
-                            const cleanName = (targetLic?.schoolName || val)
+                            const cleanName = (isAdminSchool(val) ? 'TRƯỜNG THCS ADMIN' : targetLic?.schoolName || val)
                               .replace(/\s*\([^)]*\)/g, '')
                               .replace(/khôi phục/gi, '')
                               .trim();
@@ -361,12 +373,16 @@ export const Layout: React.FC<LayoutProps> = ({
                             .getSchoolLicenses()
                             .filter((lic) => !isThongKeSchool(lic.id, lic.schoolName) && lic.id !== 'school_thongke' && lic.status !== 'locked')
                             .map((lic) => {
-                              const cleanName = (lic.schoolName || '')
-                                .replace(/\s*\([^)]*\)/g, '')
-                                .replace(/khôi phục/gi, '')
-                                .trim();
+                              const isAdm = isAdminSchool(lic.id);
+                              const idVal = isAdm ? 'school_admin' : lic.id;
+                              const cleanName = isAdm
+                                ? 'TRƯỜNG THCS ADMIN'
+                                : (lic.schoolName || '')
+                                  .replace(/\s*\([^)]*\)/g, '')
+                                  .replace(/khôi phục/gi, '')
+                                  .trim();
                               return (
-                                <option key={lic.id} value={lic.id}>
+                                <option key={idVal} value={idVal}>
                                   {cleanName}
                                 </option>
                               );
@@ -377,10 +393,12 @@ export const Layout: React.FC<LayoutProps> = ({
                       <span className="inline-flex items-center gap-1.5 text-xs bg-slate-100 text-slate-800 border border-slate-300 font-bold px-2.5 py-0.5 rounded-lg shadow-2xs">
                         <Building2 className="w-3.5 h-3.5 text-blue-800 shrink-0" />
                         <span className="max-w-[280px] truncate">
-                          {(schoolInfo.schoolName || 'TRƯỜNG HỌC')
-                            .replace(/\s*\([^)]*\)/g, '')
-                            .replace(/khôi phục/gi, '')
-                            .trim()}
+                          {isAdminSchool(currentSchoolId)
+                            ? 'TRƯỜNG THCS ADMIN'
+                            : (schoolInfo.schoolName || 'TRƯỜNG HỌC')
+                                .replace(/\s*\([^)]*\)/g, '')
+                                .replace(/khôi phục/gi, '')
+                                .trim()}
                         </span>
                       </span>
                     )}
@@ -742,8 +760,27 @@ export const Layout: React.FC<LayoutProps> = ({
                       Đang dùng: <strong className="text-slate-800">{currentUser.name}</strong> ({currentUser.permission === 'edit' ? 'Có quyền sửa' : 'Chỉ xem'})
                     </div>
 
+                    <div className="px-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setSelfOldPassword('');
+                          setSelfNewPassword('');
+                          setSelfConfirmPassword('');
+                          setSelfPwdError(null);
+                          setSelfPwdSuccess(null);
+                          setIsChangePasswordModalOpen(true);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer font-bold"
+                      >
+                        <KeyRound className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Đổi mật khẩu tài khoản</span>
+                      </button>
+                    </div>
+
                     {onSignOut && (
-                      <div className="px-2 pt-2 mt-2 border-t border-slate-100">
+                      <div className="px-2 pt-2 mt-1 border-t border-slate-100">
                         <button
                           type="button"
                           onClick={() => {
@@ -919,13 +956,13 @@ export const Layout: React.FC<LayoutProps> = ({
                 </div>
                 {isMasterSuperAdmin ? (
                   <select
-                    value={currentSchoolId}
+                    value={isAdminSchool(currentSchoolId) ? 'school_admin' : currentSchoolId}
                     onChange={(e) => {
                       const val = e.target.value;
                       dataStore.setSchoolId(val);
                       setCurrentSchoolId(val);
                       const targetLic = dataStore.getSchoolLicenseById(val);
-                      const cleanName = (targetLic?.schoolName || val)
+                      const cleanName = (isAdminSchool(val) ? 'TRƯỜNG THCS ADMIN' : targetLic?.schoolName || val)
                         .replace(/\s*\([^)]*\)/g, '')
                         .replace(/khôi phục/gi, '')
                         .trim();
@@ -937,12 +974,16 @@ export const Layout: React.FC<LayoutProps> = ({
                       .getSchoolLicenses()
                       .filter((lic) => !isThongKeSchool(lic.id, lic.schoolName) && lic.id !== 'school_thongke' && lic.status !== 'locked')
                       .map((lic) => {
-                        const cleanName = (lic.schoolName || '')
-                          .replace(/\s*\([^)]*\)/g, '')
-                          .replace(/khôi phục/gi, '')
-                          .trim();
+                        const isAdm = isAdminSchool(lic.id);
+                        const idVal = isAdm ? 'school_admin' : lic.id;
+                        const cleanName = isAdm
+                          ? 'TRƯỜNG THCS ADMIN'
+                          : (lic.schoolName || '')
+                            .replace(/\s*\([^)]*\)/g, '')
+                            .replace(/khôi phục/gi, '')
+                            .trim();
                         return (
-                          <option key={lic.id} value={lic.id}>
+                          <option key={idVal} value={idVal}>
                             {cleanName}
                           </option>
                         );
@@ -1301,6 +1342,158 @@ export const Layout: React.FC<LayoutProps> = ({
                 Ở lại trang hiện tại
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL NGƯỜI DÙNG TỰ ĐỔI MẬT KHẨU */}
+      {isChangePasswordModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-blue-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-amber-300" />
+                <h3 className="font-bold text-sm sm:text-base">
+                  Đổi mật khẩu tài khoản
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsChangePasswordModalOpen(false)}
+                className="p-1 rounded-lg text-blue-200 hover:text-white hover:bg-blue-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSelfPwdError(null);
+                setSelfPwdSuccess(null);
+
+                if (!selfOldPassword) {
+                  setSelfPwdError('Vui lòng nhập mật khẩu hiện tại!');
+                  return;
+                }
+                if (!selfNewPassword || selfNewPassword.length < 6) {
+                  setSelfPwdError('Mật khẩu mới phải có ít nhất 6 ký tự!');
+                  return;
+                }
+                if (selfNewPassword !== selfConfirmPassword) {
+                  setSelfPwdError('Xác nhận mật khẩu mới không khớp!');
+                  return;
+                }
+
+                const res = dataStore.changeUserPassword(currentUser.id, selfOldPassword, selfNewPassword);
+                if (res.success) {
+                  setSelfPwdSuccess('Đổi mật khẩu thành công! Bạn có thể sử dụng mật khẩu mới ở lần đăng nhập tiếp theo.');
+                  toastService.success('Đổi mật khẩu tài khoản thành công!');
+                  setTimeout(() => {
+                    setIsChangePasswordModalOpen(false);
+                  }, 1800);
+                } else {
+                  setSelfPwdError(res.message);
+                }
+              }}
+              className="p-6 space-y-4 text-xs"
+            >
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <div className="font-bold text-slate-800 text-sm">{currentUser.name}</div>
+                <div className="text-slate-500 font-mono text-[11px]">{currentUser.email}</div>
+                <div className="text-slate-400 text-[10px]">Tài khoản: {currentUser.roleTitle || currentUser.role}</div>
+              </div>
+
+              {selfPwdError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{selfPwdError}</span>
+                </div>
+              )}
+
+              {selfPwdSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{selfPwdSuccess}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Mật khẩu hiện tại <span className="text-rose-600">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showSelfOldPwd ? 'text' : 'password'}
+                    value={selfOldPassword}
+                    onChange={(e) => setSelfOldPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu đang dùng"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSelfOldPwd(!showSelfOldPwd)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showSelfOldPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Mật khẩu mới <span className="text-rose-600">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showSelfNewPwd ? 'text' : 'password'}
+                    value={selfNewPassword}
+                    onChange={(e) => setSelfNewPassword(e.target.value)}
+                    placeholder="Tối thiểu 6 ký tự"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSelfNewPwd(!showSelfNewPwd)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showSelfNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Xác nhận mật khẩu mới <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type={showSelfNewPwd ? 'text' : 'password'}
+                  value={selfConfirmPassword}
+                  onChange={(e) => setSelfConfirmPassword(e.target.value)}
+                  placeholder="Nhập lại mật khẩu mới"
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsChangePasswordModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Cập nhật mật khẩu</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

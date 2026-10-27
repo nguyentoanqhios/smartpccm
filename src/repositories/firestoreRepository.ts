@@ -828,10 +828,15 @@ export class FirestoreRepository {
       if (!auth.currentUser) await ensureFirebaseAuth();
       const colRef = collection(db, 'licenses');
       const snap = await getDocs(colRef);
-      return snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as any),
-      }));
+      return snap.docs.map((d) => {
+        const raw = d.data() as any;
+        const isAdm = d.id === 'school_quyhop' || d.id === 'school_admin' || (raw.schoolName && raw.schoolName.toUpperCase().includes('QUỲ HỢP'));
+        return {
+          ...raw,
+          id: isAdm ? 'school_admin' : d.id,
+          schoolName: isAdm ? 'TRƯỜNG THCS ADMIN' : (raw.schoolName || 'TRƯỜNG THCS MỚI'),
+        };
+      });
     } catch (err: any) {
       if (isQuotaExhaustedError(err)) {
         markQuotaExceeded();

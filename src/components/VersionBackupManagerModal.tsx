@@ -65,7 +65,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
   const currentUser = dataStore.getCurrentUser();
   const isSuperAdmin = isSuperAdminEmail(currentUser?.email) || Boolean(currentUser?.isSuperAdmin);
   // Khôi phục dữ liệu gốc THCS Quỳ Hợp trong quản lý phiên bản và lịch sử sao lưu (chỉ hiển thị khi đang làm việc tại trường Quỳ Hợp)
-  const isQuyHopBenchmarkVisible = currentSchoolId === 'school_quyhop';
+  const isQuyHopBenchmarkVisible = currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin';
 
   useEffect(() => {
     if (!isOpen) return;
@@ -120,11 +120,11 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
     setRestoreInProgress(true);
     try {
       dataStore.restoreQuyHopData();
-      toastService.success('Đã khôi phục hoàn chỉnh 100% dữ liệu TRƯỜNG THCS QUỲ HỢP (42 lớp - 74 giáo viên)!');
+      toastService.success('Đã khôi phục hoàn chỉnh 100% dữ liệu TRƯỜNG THCS ADMIN (42 lớp - 74 giáo viên)!');
       setConfirmRestoreId(null);
       onRestored?.();
     } catch (err: any) {
-      toastService.error(err?.message || 'Lỗi khi khôi phục dữ liệu THCS Quỳ Hợp');
+      toastService.error(err?.message || 'Lỗi khi khôi phục dữ liệu THCS ADMIN');
     } finally {
       setRestoreInProgress(false);
     }
@@ -370,7 +370,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-amber-950">
-                        Bản dữ liệu chuẩn TRƯỜNG THCS QUỲ HỢP (42 Lớp - 74 Giáo viên)
+                        Bản dữ liệu chuẩn TRƯỜNG THCS ADMIN (42 Lớp - 74 Giáo viên)
                       </h4>
                       <p className="text-[11px] text-amber-900/80">
                         Chứa đủ 11 lớp K6, 10 lớp K7, 9 lớp K8, 12 lớp K9 cùng phân công chuyên môn và kiêm nhiệm chuẩn xác.
@@ -382,7 +382,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
                     className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition shrink-0 cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Khôi phục dữ liệu gốc THCS Quỳ Hợp</span>
+                    <span>Khôi phục dữ liệu gốc THCS ADMIN</span>
                   </button>
                 </div>
               )}
@@ -390,7 +390,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
               {/* Danh sách các bản sao lưu đã lưu */}
               {(() => {
                 const schoolBackups = backups.filter((b) => {
-                  if (currentSchoolId === 'school_quyhop') return true;
+                  if (currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin') return true;
                   return b.schoolId === currentSchoolId;
                 });
 
@@ -693,7 +693,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
               </div>
               <div className="text-center space-y-1">
                 <h3 className="text-base font-bold text-slate-900">
-                  Xác nhận khôi phục dữ liệu gốc THCS Quỳ Hợp?
+                  Xác nhận khôi phục dữ liệu gốc THCS ADMIN?
                 </h3>
                 <p className="text-xs text-slate-600">
                   Hệ thống sẽ thiết lập lại toàn diện <strong>42 lớp học</strong> (K6: 11 lớp, K7: 10 lớp, K8: 9 lớp, K9: 12 lớp), <strong>74 giáo viên</strong> và các chức vụ kiêm nhiệm, phân công chuyên môn chuẩn xác.

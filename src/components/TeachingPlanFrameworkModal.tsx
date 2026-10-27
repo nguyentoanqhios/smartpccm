@@ -608,7 +608,7 @@ export const TeachingPlanFrameworkModal: React.FC<TeachingPlanFrameworkModalProp
     return recalculateSchoolSummary(gradePlans, duties, teacherCountDirect, 35, 18, 17);
   }, [gradePlans, duties, teacherCountDirect]);
 
-  const schoolName = schoolInfo?.schoolName || 'TRƯỜNG THCS QUỲ HỢP';
+  const schoolName = schoolInfo?.schoolName || 'TRƯỜNG THCS ADMIN';
   const schoolYear = schoolInfo?.schoolYear || '2026-2027';
 
   // Format số

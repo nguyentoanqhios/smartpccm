@@ -206,9 +206,16 @@ export function normalizePositionName(name: string): string {
     return 'Giáo viên chủ nhiệm';
   }
 
-  // Nếu là "Chủ nhiệm 6A1" hoặc "GVCN 6A1"
-  if (lower.startsWith('gvcn ') || lower.startsWith('chủ nhiệm lớp ') || lower.startsWith('chủ nhiệm ')) {
-    const classPart = clean.replace(/^(gvcn|chủ nhiệm lớp|chủ nhiệm)\s*/i, '').trim();
+  // Nếu là "Chủ nhiệm 6A1" hoặc "GVCN 6A1" hoặc "Chủ nhiệm lớp LỚP 6A1"
+  if (
+    lower.startsWith('gvcn ') ||
+    lower.startsWith('chủ nhiệm lớp ') ||
+    lower.startsWith('chủ nhiệm ') ||
+    lower.startsWith('cn ')
+  ) {
+    const rawClass = clean.replace(/^(gvcn|chủ nhiệm lớp|chủ nhiệm|cn)\s*/i, '').trim();
+    // Loại bỏ tiền tố "lớp" hoặc "lop" bị lặp lại (ví dụ "LỚP 6A3" -> "6A3")
+    const classPart = rawClass.replace(/^(lớp|lop)\s*/i, '').trim();
     if (classPart) {
       return `Chủ nhiệm lớp ${classPart.toUpperCase()}`;
     }
@@ -313,7 +320,10 @@ export function getTeacherPositions(
   if (Array.isArray(classes)) {
     const homeroomClasses = classes.filter((c) => !c.isDeleted && c.homeroomTeacherId === teacher.id);
     homeroomClasses.forEach((c) => {
-      result.add(`Chủ nhiệm lớp ${c.name}`);
+      const cleanClassName = (c.name || '').replace(/^(lớp|lop)\s*/i, '').trim().toUpperCase();
+      if (cleanClassName) {
+        result.add(`Chủ nhiệm lớp ${cleanClassName}`);
+      }
     });
   }
 
@@ -340,7 +350,10 @@ export function getTeacherPositions(
           } else if (asg.classId && Array.isArray(classes)) {
             const cls = classes.find((c) => c.id === asg.classId);
             if (cls) {
-              result.add(`Chủ nhiệm lớp ${cls.name}`);
+              const cleanClassName = (cls.name || '').replace(/^(lớp|lop)\s*/i, '').trim().toUpperCase();
+              if (cleanClassName) {
+                result.add(`Chủ nhiệm lớp ${cleanClassName}`);
+              }
             }
           }
         }
@@ -349,7 +362,8 @@ export function getTeacherPositions(
   }
 
   // 6. Khử trùng lặp thông minh:
-  // Nếu đã có "Chủ nhiệm lớp X" thì loại bỏ "Giáo viên chủ nhiệm" chung chung nếu có
+  // - Nếu đã có "Chủ nhiệm lớp X" thì loại bỏ "Giáo viên chủ nhiệm" chung chung nếu có
+  // - Khử trùng triệt để các biến thể của "Chủ nhiệm lớp LỚP X" và "Chủ nhiệm lớp X"
   const list = Array.from(result);
   const hasSpecificCN = list.some((p) => p.startsWith('Chủ nhiệm lớp '));
   const filtered = list.filter((p) => {
@@ -359,7 +373,25 @@ export function getTeacherPositions(
     return true;
   });
 
-  return filtered;
+  const finalPositions: string[] = [];
+  const seenHomeroomClasses = new Set<string>();
+
+  for (const pos of filtered) {
+    const match = pos.match(/^Chủ nhiệm lớp\s+(?:lớp\s+)?(.+)$/i);
+    if (match) {
+      const clsKey = match[1].trim().toUpperCase();
+      if (!seenHomeroomClasses.has(clsKey)) {
+        seenHomeroomClasses.add(clsKey);
+        finalPositions.push(`Chủ nhiệm lớp ${clsKey}`);
+      }
+    } else {
+      if (!finalPositions.includes(pos)) {
+        finalPositions.push(pos);
+      }
+    }
+  }
+
+  return finalPositions;
 }
 
 /**

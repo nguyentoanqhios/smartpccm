@@ -160,9 +160,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
       dataStore.restoreQuyHopData();
       setSchoolInfo(dataStore.getSchoolInfo());
       setBackups(dataStore.getBackups());
-      showModalStatus('✓ Đã mở lại và khôi phục thành công toàn bộ dữ liệu TRƯỜNG THCS QUỲ HỢP (20 GV, 16 Lớp, BGH Thầy Nguyễn Văn Toàn)!', 'success');
+      showModalStatus('✓ Đã mở lại và khôi phục thành công toàn bộ dữ liệu TRƯỜNG THCS ADMIN (20 GV, 16 Lớp, BGH Thầy Nguyễn Văn Toàn)!', 'success');
     } catch (err: any) {
-      showModalStatus(err?.message || 'Lỗi khi mở lại dữ liệu THCS Quỳ Hợp', 'error');
+      showModalStatus(err?.message || 'Lỗi khi mở lại dữ liệu THCS ADMIN', 'error');
     }
   };
 
@@ -1026,7 +1026,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[11px] text-blue-200/90 mt-0.5">
-                      Đồng bộ dữ liệu trực tuyến từ Google Cloud Firestore hoặc mở lại cơ sở dữ liệu gốc TRƯỜNG THCS QUỲ HỢP
+                      Đồng bộ dữ liệu trực tuyến từ Google Cloud Firestore hoặc mở lại cơ sở dữ liệu gốc TRƯỜNG THCS ADMIN
                     </p>
                   </div>
                 </div>
@@ -1087,17 +1087,17 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({
                   <span>{isPullingCloud ? 'Đang tải từ Cloud...' : 'Tải dữ liệu từ Cloud Firestore về máy'}</span>
                 </button>
 
-                {currentSchoolId === 'school_quyhop' && (
+                {(currentSchoolId === 'school_admin' || currentSchoolId === 'school_quyhop') && (
                   <button
                     type="button"
                     id="restore-quy-hop-btn"
                     onClick={handleRestoreQuyHop}
                     disabled={isPullingCloud || isPushingCloud}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-                    title="Mở lại toàn bộ danh sách giáo viên, lớp học và phân công chuẩn TRƯỜNG THCS QUỲ HỢP"
+                    title="Mở lại toàn bộ danh sách giáo viên, lớp học và phân công chuẩn TRƯỜNG THCS ADMIN"
                   >
                     <Building2 className="w-4 h-4 text-emerald-200" />
-                    <span>Mở lại dữ liệu THCS Quỳ Hợp</span>
+                    <span>Mở lại dữ liệu THCS ADMIN</span>
                   </button>
                 )}
               </div>

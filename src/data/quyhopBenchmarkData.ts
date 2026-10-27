@@ -25,7 +25,7 @@ import {
 } from '../types';
 
 export const QUYHOP_SCHOOL_INFO: SchoolInfo = {
-  schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+  schoolName: 'TRƯỜNG THCS ADMIN',
   branchName: '',
   authorityName: '',
   provinceName: 'NGHỆ AN',

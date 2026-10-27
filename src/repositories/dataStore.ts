@@ -193,10 +193,24 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
   },
 ];
 
+export const ADMIN_SCHOOL_ID = 'school_admin';
+export const LEGACY_ADMIN_SCHOOL_ID = 'school_quyhop';
+
+export function isAdminSchool(schoolId?: string | null): boolean {
+  if (!schoolId) return true;
+  const clean = schoolId.trim().toLowerCase();
+  return clean === 'school_admin' || clean === 'admin' || clean === 'school_quyhop';
+}
+
+export function normalizeSchoolId(schoolId?: string | null): string {
+  if (!schoolId || isAdminSchool(schoolId)) return ADMIN_SCHOOL_ID;
+  return schoolId.trim();
+}
+
 export const INITIAL_SCHOOL_LICENSES: SchoolTenantLicense[] = [
   {
-    id: 'school_quyhop',
-    schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+    id: 'school_admin',
+    schoolName: 'TRƯỜNG THCS ADMIN',
     adminEmail: 'nguyentoanqh@gmail.com',
     adminName: 'Thầy Nguyễn Văn Toàn',
     assignedPasswordHint: '123456',
@@ -204,12 +218,12 @@ export const INITIAL_SCHOOL_LICENSES: SchoolTenantLicense[] = [
     planType: 'annual',
     expiresAt: '2027-08-31T23:59:59.000Z',
     contactPhone: '0961 285 888',
-    notes: 'Cơ sở dữ liệu chính thức TRƯỜNG THCS QUỲ HỢP (Chủ sở hữu: Thầy Nguyễn Văn Toàn)',
+    notes: 'Cơ sở dữ liệu chính thức TRƯỜNG THCS ADMIN (Chủ sở hữu: Thầy Nguyễn Văn Toàn)',
     maxTeachers: 9999,
     maxClasses: 9999,
     signature: generateLicenseSignature({
-      id: 'school_quyhop',
-      schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+      id: 'school_admin',
+      schoolName: 'TRƯỜNG THCS ADMIN',
       expiresAt: '2027-08-31T23:59:59.000Z',
       planType: 'annual',
       maxTeachers: 9999,
@@ -217,6 +231,30 @@ export const INITIAL_SCHOOL_LICENSES: SchoolTenantLicense[] = [
     }),
     createdAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-10-05T00:00:00.000Z',
+  },
+  {
+    id: 'school_truong_thcs_quy_hop',
+    schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+    adminEmail: 'thongkeqh@gmail.com',
+    adminName: 'Nguyễn Toàn',
+    assignedPasswordHint: 'Tk123456@',
+    status: 'active',
+    planType: 'annual',
+    expiresAt: '2027-10-25T23:59:59.000Z',
+    contactPhone: '0961285888',
+    notes: 'Đơn vị trường học đã phân quyền: TRƯỜNG THCS QUỲ HỢP',
+    maxTeachers: 500,
+    maxClasses: 200,
+    signature: generateLicenseSignature({
+      id: 'school_truong_thcs_quy_hop',
+      schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+      expiresAt: '2027-10-25T23:59:59.000Z',
+      planType: 'annual',
+      maxTeachers: 500,
+      maxClasses: 200,
+    }),
+    createdAt: '2026-10-25T00:12:44.013Z',
+    updatedAt: '2026-10-26T13:21:28.336Z',
   },
 ];
 
@@ -236,7 +274,7 @@ export const DEFAULT_GUEST_PROFILE: UserProfile = {
 class DataStore {
   private schoolInfo: SchoolInfo = { ...DEFAULT_SCHOOL_INFO };
   private schoolInfoByTenant: Record<string, SchoolInfo> = {};
-  private currentSchoolId: string = 'school_quyhop';
+  private currentSchoolId: string = 'school_admin';
   private isTenantDataLoaded: boolean = false;
   private schoolLicenses: SchoolTenantLicense[] = [];
   private authUid?: string;
@@ -469,19 +507,23 @@ class DataStore {
       const urlParams = this.detectUrlSchoolParams();
       const urlSchoolId = urlParams.schoolId;
       if (urlSchoolId) {
-        this.currentSchoolId = urlSchoolId;
+        this.currentSchoolId = normalizeSchoolId(urlSchoolId);
         if (typeof window !== 'undefined') {
           try {
-            localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(urlSchoolId));
+            localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(this.currentSchoolId));
           } catch {}
         }
       } else {
-        this.currentSchoolId = this.getItem(STORAGE_KEYS.SCHOOL_ID, 'school_quyhop');
+        const rawSchool = this.getItem(STORAGE_KEYS.SCHOOL_ID, 'school_admin');
+        this.currentSchoolId = normalizeSchoolId(rawSchool);
       }
       this.schoolInfoByTenant = this.getItem('pccm_school_info_tenants_v1', {});
       this.schoolInfo = this.getItem(STORAGE_KEYS.SCHOOL_INFO, DEFAULT_SCHOOL_INFO);
-      if (!this.schoolInfo || !this.schoolInfo.schoolName) {
-        this.schoolInfo = { ...DEFAULT_SCHOOL_INFO };
+      if (!this.schoolInfo || !this.schoolInfo.schoolName || (isAdminSchool(this.currentSchoolId) && this.schoolInfo.schoolName !== 'TRƯỜNG THCS ADMIN')) {
+        this.schoolInfo = {
+          ...this.schoolInfo,
+          schoolName: isAdminSchool(this.currentSchoolId) ? 'TRƯỜNG THCS ADMIN' : (this.schoolInfo?.schoolName || DEFAULT_SCHOOL_INFO.schoolName),
+        };
       }
       this.schoolYears = this.getItem(STORAGE_KEYS.SCHOOL_YEARS, INITIAL_SCHOOL_YEARS);
       const loadedVersions = this.getItem(STORAGE_KEYS.VERSIONS, INITIAL_VERSIONS);
@@ -626,7 +668,7 @@ class DataStore {
         const initMatch = INITIAL_DEPARTMENTS.find((id) => id.id === d.id || id.code === d.code);
         const dName = d.name || d.code || 'Tổ CM';
         const fullName = d.fullName || initMatch?.fullName || (dName.startsWith('Tổ ') ? dName : `Tổ ${dName}`);
-        return { ...d, name: dName, fullName, schoolId: d.schoolId || 'school_quyhop' };
+        return { ...d, name: dName, fullName, schoolId: d.schoolId || 'school_admin' };
       });
       this.duties = this.getItem(STORAGE_KEYS.DUTIES, INITIAL_DUTIES).filter((d: SpecialDuty) => !isForbiddenDutyOrExemption(d));
       this.setItem(STORAGE_KEYS.DUTIES, this.duties);
@@ -810,8 +852,25 @@ class DataStore {
       this.schoolLicenses = Array.from(mergedMap.values()).filter(
         (l) => !isThongKeSchool(l.id, l.schoolName) && !deletedSchoolIds.includes(l.id)
       );
-      if (!this.schoolLicenses.some((l) => l.id === 'school_quyhop') && !deletedSchoolIds.includes('school_quyhop')) {
+      if (!this.schoolLicenses.some((l) => isAdminSchool(l.id)) && !deletedSchoolIds.includes('school_admin')) {
         this.schoolLicenses.unshift(INITIAL_SCHOOL_LICENSES[0]);
+      }
+
+      // Tự động chuẩn hóa tên trường TRƯỜNG THCS QUỲ HỢP thành TRƯỜNG THCS ADMIN cho tài khoản admin cao cấp
+      this.schoolLicenses = this.schoolLicenses.map((lic) => {
+        if (isAdminSchool(lic.id)) {
+          return {
+            ...lic,
+            id: 'school_admin',
+            schoolName: 'TRƯỜNG THCS ADMIN',
+            notes: 'Cơ sở dữ liệu chính thức TRƯỜNG THCS ADMIN (Chủ sở hữu: Thầy Nguyễn Văn Toàn)',
+          };
+        }
+        return lic;
+      });
+
+      if (isAdminSchool(this.currentSchoolId)) {
+        this.schoolInfo = { ...this.schoolInfo, schoolName: 'TRƯỜNG THCS ADMIN' };
       }
 
       // Tự động nhận diện & nạp thông tin trường học từ URL params nếu mở qua liên kết chia sẻ
@@ -967,21 +1026,42 @@ class DataStore {
     }
   }
 
-  private getItem<T>(key: string, fallback: T): T {
+   private getItem<T>(key: string, fallback: T): T {
     if (typeof window === 'undefined') return fallback;
     const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    try {
-      return JSON.parse(raw) as T;
-    } catch {
-      return fallback;
+    if (raw) {
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return fallback;
+      }
     }
+    // Hỗ trợ khôi phục dữ liệu kế thừa từ school_quyhop sang school_admin
+    if (key.endsWith('__school_admin')) {
+      const legacyKey = key.replace('__school_admin', '__school_quyhop');
+      const legacyRaw = localStorage.getItem(legacyKey);
+      if (legacyRaw) {
+        try {
+          localStorage.setItem(key, legacyRaw);
+          return JSON.parse(legacyRaw) as T;
+        } catch {
+          return fallback;
+        }
+      }
+    }
+    return fallback;
   }
 
   private setItem<T>(key: string, value: T): void {
     if (typeof window === 'undefined') return;
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      const strVal = JSON.stringify(value);
+      localStorage.setItem(key, strVal);
+      // Đồng bộ hai chiều cho key school_quyhop để tương thích ngược 100%
+      if (key.endsWith('__school_admin')) {
+        const legacyKey = key.replace('__school_admin', '__school_quyhop');
+        localStorage.setItem(legacyKey, strVal);
+      }
     } catch (e) {
       console.warn('Lỗi ghi localStorage:', e);
     }
@@ -1078,10 +1158,8 @@ class DataStore {
    * Trường gốc 'school_quyhop' dùng key mặc định để duy trì tính tương thích
    */
   public getScopedKey(baseKey: string, schoolId: string = this.currentSchoolId): string {
-    if (!schoolId) {
-      return baseKey;
-    }
-    return `${baseKey}_${schoolId}`;
+    const sId = isAdminSchool(schoolId) ? 'school_admin' : (schoolId ? schoolId.trim() : 'school_admin');
+    return `${baseKey}_${sId}`;
   }
 
   /**
@@ -1091,12 +1169,12 @@ class DataStore {
   public loadTenantData(schoolId: string): void {
     if (!schoolId) return;
 
-    const isQuyHop = schoolId === 'school_quyhop';
+    const isQuyHop = isAdminSchool(schoolId);
     const scopedInfoKey = this.getScopedKey(STORAGE_KEYS.SCHOOL_INFO, schoolId);
     let existingSavedInfo = this.getItem<SchoolInfo | null>(scopedInfoKey, null);
     if (!existingSavedInfo && isQuyHop) {
       const baseInfo = this.getItem<SchoolInfo | null>(STORAGE_KEYS.SCHOOL_INFO, null);
-      if (baseInfo && baseInfo.schoolName && baseInfo.schoolName.toUpperCase().includes('QUỲ HỢP')) {
+      if (baseInfo && baseInfo.schoolName && (baseInfo.schoolName.toUpperCase().includes('QUỲ HỢP') || baseInfo.schoolName.toUpperCase().includes('ADMIN'))) {
         existingSavedInfo = baseInfo;
       }
     }
@@ -1107,7 +1185,8 @@ class DataStore {
     const targetEmail = license?.adminEmail || (urlParams.schoolId === schoolId ? urlParams.adminEmail : null);
 
     if (existingSavedInfo && existingSavedInfo.schoolName) {
-      let cleanSchoolName = targetSchoolName || existingSavedInfo.schoolName;
+      let cleanSchoolName = isQuyHop ? 'TRƯỜNG THCS ADMIN' : (targetSchoolName || existingSavedInfo.schoolName);
+      // cleanSchoolName kept for non-admin school
       let cleanAuthority = existingSavedInfo.authorityName || '';
       let cleanPrincipal = existingSavedInfo.principalName || '';
       let cleanDean = existingSavedInfo.deanName || '';
@@ -1281,7 +1360,7 @@ class DataStore {
       localStorage.setItem(STORAGE_KEYS.FEEDBACKS, JSON.stringify(this.feedbacks));
       localStorage.setItem(STORAGE_KEYS.BACKUPS, JSON.stringify(this.backups));
 
-      const sId = this.currentSchoolId || 'school_quyhop';
+      const sId = this.currentSchoolId || 'school_admin';
       if (!this.isTenantDataLoaded && sId !== 'school_quyhop') {
         // Prevent writing un-scoped global state to tenant scoped cache before loadTenantData completes
         return;
@@ -1326,7 +1405,7 @@ class DataStore {
     this.hasUnsavedChangesFlag = val;
     if (typeof window !== 'undefined') {
       try {
-        const sId = this.currentSchoolId || 'school_quyhop';
+        const sId = this.currentSchoolId || 'school_admin';
         localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), val ? 'true' : 'false');
       } catch {}
     }
@@ -1346,7 +1425,7 @@ class DataStore {
       clearTimeout(this.saveDebounceTimer);
       this.saveDebounceTimer = null;
     }
-    const sId = this.currentSchoolId || 'school_quyhop';
+    const sId = this.currentSchoolId || 'school_admin';
     this.loadTenantData(sId);
     this.hasUnsavedChangesFlag = false;
     if (typeof window !== 'undefined') {
@@ -1370,7 +1449,7 @@ class DataStore {
       this.hasUnsavedChangesFlag = true;
       if (typeof window !== 'undefined') {
         try {
-          const sId = this.currentSchoolId || 'school_quyhop';
+          const sId = this.currentSchoolId || 'school_admin';
           localStorage.setItem(this.getScopedKey('pccm_has_unsaved_changes', sId), 'true');
         } catch {}
       }
@@ -1401,18 +1480,22 @@ class DataStore {
 
   // School Information
   public getSchoolInfo(): SchoolInfo {
-    const isQuyHop = this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = isAdminSchool(this.currentSchoolId);
     const lic = this.getSchoolLicenseById(this.currentSchoolId);
     const urlParams = this.detectUrlSchoolParams();
 
     let name = this.schoolInfo.schoolName;
-    if (!name || name === 'TRƯỜNG THCS MỚI') {
+    if (isQuyHop) {
+      if (!name || name === 'TRƯỜNG THCS MỚI' || name === 'TRƯỜNG THCS QUỲ HỢP') {
+        name = 'TRƯỜNG THCS ADMIN';
+      }
+    } else if (!name || name === 'TRƯỜNG THCS MỚI') {
       if (lic && lic.schoolName && lic.schoolName !== 'TRƯỜNG THCS MỚI') {
         name = lic.schoolName;
       } else if (urlParams.schoolId === this.currentSchoolId && urlParams.schoolName && urlParams.schoolName !== 'TRƯỜNG THCS MỚI') {
         name = urlParams.schoolName;
       } else if (isQuyHop) {
-        name = 'TRƯỜNG THCS QUỲ HỢP';
+        name = 'TRƯỜNG THCS ADMIN';
       }
     }
 
@@ -1481,13 +1564,13 @@ class DataStore {
     if (this.currentSchoolId === 'school_quyhop') return true;
     const lic = this.getSchoolLicenseById(this.currentSchoolId);
     if (lic && lic.schoolName) return true;
-    const key = `${STORAGE_KEYS.INITIAL_SETUP_COMPLETED}_${this.currentSchoolId || 'school_quyhop'}`;
+    const key = `${STORAGE_KEYS.INITIAL_SETUP_COMPLETED}_${this.currentSchoolId || 'school_admin'}`;
     return this.getItem(key, false);
   }
 
   public setInitialSetupCompleted(completed: boolean): void {
     if (typeof window !== 'undefined') {
-      const key = `${STORAGE_KEYS.INITIAL_SETUP_COMPLETED}_${this.currentSchoolId || 'school_quyhop'}`;
+      const key = `${STORAGE_KEYS.INITIAL_SETUP_COMPLETED}_${this.currentSchoolId || 'school_admin'}`;
       localStorage.setItem(key, JSON.stringify(completed));
     }
     this.listeners.forEach((l) => l());
@@ -1630,7 +1713,7 @@ class DataStore {
    * Mở lại và khôi phục toàn diện dữ liệu chính thức TRƯỜNG THCS QUỲ HỢP
    */
   public restoreQuyHopData(): void {
-    this.currentSchoolId = 'school_quyhop';
+    this.currentSchoolId = 'school_admin';
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify('school_quyhop'));
@@ -1641,12 +1724,12 @@ class DataStore {
           sessionStorage.setItem('pccm_authenticated_session', 'true');
         }
         const url = new URL(window.location.href);
-        url.searchParams.set('schoolId', 'school_quyhop');
+        url.searchParams.set('schoolId', 'school_admin');
         window.history.replaceState(null, '', url.toString());
       } catch {}
     }
 
-    const license = this.getSchoolLicenseById('school_quyhop');
+    const license = this.getSchoolLicenseById('school_admin');
     this.schoolInfo = {
       ...QUYHOP_SCHOOL_INFO,
       schoolName: license?.schoolName || QUYHOP_SCHOOL_INFO.schoolName,
@@ -1675,7 +1758,7 @@ class DataStore {
         action: 'SEED_RESET',
         entityType: 'VERSION',
         entityId: 'root',
-        entityDescription: 'Đã mở lại và khôi phục toàn bộ cơ sở dữ liệu chính thức TRƯỜNG THCS QUỲ HỢP (42 lớp - 74 giáo viên)',
+        entityDescription: 'Đã mở lại và khôi phục toàn bộ cơ sở dữ liệu chính thức TRƯỜNG THCS ADMIN (42 lớp - 74 giáo viên)',
       },
     ];
 
@@ -1688,17 +1771,17 @@ class DataStore {
       const nowIso = new Date().toISOString();
       this.backups.unshift({
         id: 'backup_quyhop_benchmark',
-        title: 'Bản gốc TRƯỜNG THCS QUỲ HỢP (42 lớp - 74 GV)',
+        title: 'Bản gốc TRƯỜNG THCS ADMIN (42 lớp - 74 GV)',
         createdAt: nowIso,
         createdBy: 'Hệ thống Quản trị',
         versionCount: 2,
         teacherCount: this.teachers.length,
         assignmentCount: this.assignments.length,
-        tenantId: 'school_quyhop',
-        schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+        tenantId: 'school_admin',
+        schoolName: 'TRƯỜNG THCS ADMIN',
         dataJson: JSON.stringify({
-          tenantId: 'school_quyhop',
-          schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+          tenantId: 'school_admin',
+          schoolName: 'TRƯỜNG THCS ADMIN',
           schoolInfo: this.schoolInfo,
           schoolYears: this.schoolYears,
           versions: this.versions,
@@ -1731,7 +1814,7 @@ class DataStore {
       } catch {}
     }
 
-    this.initFirestoreRealtimeSync('school_quyhop');
+    this.initFirestoreRealtimeSync('school_admin');
     this.notify();
   }
 
@@ -1776,20 +1859,21 @@ class DataStore {
 
   // Multi-tenant School & Auth Management
   public getSchoolId(): string {
-    return this.currentSchoolId || 'school_quyhop';
+    return isAdminSchool(this.currentSchoolId) ? 'school_admin' : (this.currentSchoolId || 'school_admin');
   }
 
   public setSchoolId(schoolId: string): void {
     if (!schoolId) return;
+    const target = normalizeSchoolId(schoolId);
 
     // 1. Lưu lại trạng thái của trường hiện tại
     this.saveLocalCacheOnly();
 
     // 2. Chuyển sang schoolId mới
-    this.currentSchoolId = schoolId;
+    this.currentSchoolId = target;
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(schoolId));
+        localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(target));
         const isAuthed = sessionStorage.getItem('pccm_authenticated_session') === 'true';
         const isSuper = this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email);
         if (isSuper || isAuthed) {
@@ -1832,7 +1916,7 @@ class DataStore {
     payload: ComprehensiveSetupPayload,
     targetSchoolId?: string
   ): Promise<void> {
-    const sId = targetSchoolId || this.currentSchoolId || 'school_quyhop';
+    const sId = targetSchoolId || this.currentSchoolId || 'school_admin';
     this.currentSchoolId = sId;
 
     if (payload.schoolInfo) {
@@ -1923,7 +2007,7 @@ class DataStore {
    */
   public restoreFromCloudflarePayload(remoteData: any, schoolId: string): void {
     if (!remoteData) return;
-    this.currentSchoolId = schoolId || this.currentSchoolId || 'school_quyhop';
+    this.currentSchoolId = schoolId || this.currentSchoolId || 'school_admin';
     if (remoteData.schoolInfo) {
       this.schoolInfo = {
         ...this.schoolInfo,
@@ -1985,17 +2069,27 @@ class DataStore {
             firestoreRepository.deleteSchoolLicense(cl.id).catch(() => {});
             return;
           }
-          const existing = map.get(cl.id);
-          const effectiveName = (cl.schoolName && cl.schoolName !== 'TRƯỜNG THCS MỚI')
-            ? cl.schoolName
-            : (existing?.schoolName || cl.schoolName || 'TRƯỜNG THCS MỚI');
-          map.set(cl.id, {
+          const isAdm = isAdminSchool(cl.id);
+          const targetId = isAdm ? 'school_admin' : cl.id;
+          const existing = map.get(targetId);
+          const effectiveName = isAdm
+            ? 'TRƯỜNG THCS ADMIN'
+            : ((cl.schoolName && cl.schoolName !== 'TRƯỜNG THCS MỚI')
+              ? cl.schoolName
+              : (existing?.schoolName || cl.schoolName || 'TRƯỜNG THCS MỚI'));
+          map.set(targetId, {
             ...existing,
             ...cl,
+            id: targetId,
             schoolName: effectiveName,
             assignedPasswordHint: cl.assignedPasswordHint || existing?.assignedPasswordHint || '',
           });
         });
+      }
+
+      map.delete('school_quyhop');
+      if (!map.has('school_admin')) {
+        map.set('school_admin', INITIAL_SCHOOL_LICENSES[0]);
       }
 
       this.schoolLicenses = Array.from(map.values()).filter(
@@ -2010,7 +2104,7 @@ class DataStore {
       if (curLic && curLic.schoolName && curLic.schoolName !== 'TRƯỜNG THCS MỚI') {
         this.schoolInfo = {
           ...this.schoolInfo,
-          schoolName: curLic.schoolName,
+          schoolName: isAdminSchool(this.currentSchoolId) ? 'TRƯỜNG THCS ADMIN' : curLic.schoolName,
           email: curLic.adminEmail || this.schoolInfo.email,
           phone: curLic.contactPhone || this.schoolInfo.phone,
         };
@@ -2081,11 +2175,49 @@ class DataStore {
 
   public getSchoolLicenses(): SchoolTenantLicense[] {
     const deletedSchoolIds: string[] = this.getItem('pccm_deleted_school_ids', []);
-    return this.schoolLicenses.filter((l) => !isThongKeSchool(l.id, l.schoolName) && !deletedSchoolIds.includes(l.id));
+    const rawList = this.schoolLicenses.filter((l) => !isThongKeSchool(l.id, l.schoolName) && !deletedSchoolIds.includes(l.id));
+
+    const map = new Map<string, SchoolTenantLicense>();
+    for (const lic of rawList) {
+      if (isAdminSchool(lic.id)) {
+        map.set('school_admin', {
+          ...lic,
+          id: 'school_admin',
+          schoolName: 'TRƯỜNG THCS ADMIN',
+          adminEmail: 'nguyentoanqh@gmail.com',
+          adminName: 'Thầy Nguyễn Văn Toàn',
+          assignedPasswordHint: '123456',
+          status: 'active',
+          planType: 'annual',
+          notes: 'Cơ sở dữ liệu chính thức TRƯỜNG THCS ADMIN (Chủ sở hữu: Thầy Nguyễn Văn Toàn)',
+        });
+      } else {
+        map.set(lic.id, lic);
+      }
+    }
+
+    if (!map.has('school_admin')) {
+      map.set('school_admin', INITIAL_SCHOOL_LICENSES[0]);
+    }
+
+    const adminLic = map.get('school_admin')!;
+    const otherLics = Array.from(map.values()).filter((l) => l.id !== 'school_admin');
+    return [adminLic, ...otherLics];
   }
 
   public getSchoolLicenseById(id: string): SchoolTenantLicense | undefined {
     if (!id) return undefined;
+    if (isAdminSchool(id)) {
+      const found = this.schoolLicenses.find((l) => isAdminSchool(l.id));
+      if (found) {
+        return {
+          ...found,
+          id: 'school_admin',
+          schoolName: 'TRƯỜNG THCS ADMIN',
+        };
+      }
+      return INITIAL_SCHOOL_LICENSES[0];
+    }
     const clean = id.trim().toLowerCase();
     const withPrefix = clean.startsWith('school_') ? clean : `school_${clean}`;
     const withoutPrefix = clean.replace(/^school_/, '');
@@ -2105,7 +2237,7 @@ class DataStore {
    * - Tính số ngày còn lại (daysRemaining)
    */
   public checkSchoolLicense(schoolId?: string): LicenseCheckResult {
-    const targetId = schoolId || this.currentSchoolId || 'school_quyhop';
+    const targetId = schoolId || this.currentSchoolId || 'school_admin';
 
     // 1. Tài khoản Chủ sở hữu / Quản trị viên tối cao: Toàn quyền truy cập mọi trường
     if (this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email)) {
@@ -2115,20 +2247,20 @@ class DataStore {
         status: 'active',
         daysRemaining: null,
         message: 'Tài khoản Chủ sở hữu / Quản trị viên tối cao (Toàn quyền quản trị)',
-        schoolName: currentLic?.schoolName || this.schoolInfo.schoolName || 'TRƯỜNG THCS MỚI',
+        schoolName: (isAdminSchool(targetId) ? 'TRƯỜNG THCS ADMIN' : currentLic?.schoolName) || this.schoolInfo.schoolName || 'TRƯỜNG THCS MỚI',
         expiresAt: null,
       };
     }
 
-    let lic = this.schoolLicenses.find((l) => l.id === targetId);
+    let lic = this.schoolLicenses.find((l) => (isAdminSchool(targetId) ? isAdminSchool(l.id) : l.id === targetId));
     if (!lic) {
-      if (targetId === 'school_quyhop') {
+      if (isAdminSchool(targetId)) {
         return {
           isValid: true,
           status: 'active',
           daysRemaining: null,
           message: 'Bản quyền trường học chính thức hợp lệ',
-          schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+          schoolName: 'TRƯỜNG THCS ADMIN',
           expiresAt: null,
         };
       }
@@ -2275,13 +2407,13 @@ class DataStore {
     }
 
     const currentLic = this.getCurrentSchoolLicense();
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     // Đếm chính xác số giáo viên và lớp học thuộc về trường hiện tại (không tính trường khác)
     const schoolTeachersCount = this.teachers.filter(
-      (t) => !t.isDeleted && (isQuyHop ? (!t.schoolId || t.schoolId === 'school_quyhop') : t.schoolId === this.currentSchoolId)
+      (t) => !t.isDeleted && (isQuyHop ? (!t.schoolId || isAdminSchool(t.schoolId)) : t.schoolId === this.currentSchoolId)
     ).length;
     const schoolClassesCount = this.classes.filter(
-      (c) => !c.isDeleted && (isQuyHop ? (!c.schoolId || c.schoolId === 'school_quyhop') : c.schoolId === this.currentSchoolId)
+      (c) => !c.isDeleted && (isQuyHop ? (!c.schoolId || isAdminSchool(c.schoolId)) : c.schoolId === this.currentSchoolId)
     ).length;
 
     return checkSchoolQuota({
@@ -2384,7 +2516,7 @@ class DataStore {
     }
 
     // 5. Denied!
-    const targetSchoolName = license?.schoolName || (urlParams.schoolId === sId && urlParams.schoolName ? urlParams.schoolName : null) || (sId === 'school_thongke' ? 'TRƯỜNG THCS THỐNG KÊ' : sId === 'school_quyhop' ? 'TRƯỜNG THCS QUỲ HỢP' : 'trường học');
+    const targetSchoolName = license?.schoolName || (urlParams.schoolId === sId && urlParams.schoolName ? urlParams.schoolName : null) || (sId === 'school_thongke' ? 'TRƯỜNG THCS THỐNG KÊ' : sId === 'school_quyhop' ? 'TRƯỜNG THCS ADMIN' : 'trường học');
     const hint = effectiveAdminEmail ? ` (${effectiveAdminEmail})` : '';
     return {
       authorized: false,
@@ -2585,8 +2717,8 @@ class DataStore {
    * Xóa bản quyền trường học khỏi danh sách
    */
   public async deleteSchoolLicense(schoolId: string): Promise<void> {
-    if (schoolId === 'school_quyhop') {
-      throw new Error('Không thể xóa trường mặc định của hệ thống (TRƯỜNG THCS QUỲ HỢP).');
+    if (isAdminSchool(schoolId)) {
+      throw new Error('Không thể xóa trường mặc định của hệ thống (TRƯỜNG THCS ADMIN).');
     }
     this.schoolLicenses = this.schoolLicenses.filter((l) => l.id !== schoolId);
 
@@ -2607,7 +2739,7 @@ class DataStore {
     
     // Nếu trường đang được kích hoạt làm việc bị xóa -> chuyển về trường chính
     if (this.currentSchoolId === schoolId) {
-      this.currentSchoolId = 'school_quyhop';
+      this.currentSchoolId = 'school_admin';
       this.loadTenantData('school_quyhop');
     }
 
@@ -2697,14 +2829,14 @@ class DataStore {
     const isTargetQuyHop = schoolId === 'school_quyhop';
     if (schoolId === this.currentSchoolId) {
       return this.classes.filter(
-        (c) => !c.isDeleted && (isTargetQuyHop ? (!c.schoolId || c.schoolId === 'school_quyhop') : c.schoolId === schoolId)
+        (c) => !c.isDeleted && (isTargetQuyHop ? (!c.schoolId || isAdminSchool(c.schoolId)) : c.schoolId === schoolId)
       );
     }
     const scopedKey = this.getScopedKey(STORAGE_KEYS.CLASSES, schoolId);
     const loaded = this.getItem<SchoolClass[]>(scopedKey, []);
     return Array.isArray(loaded)
       ? loaded.filter(
-          (c) => !c.isDeleted && (isTargetQuyHop ? (!c.schoolId || c.schoolId === 'school_quyhop') : c.schoolId === schoolId)
+          (c) => !c.isDeleted && (isTargetQuyHop ? (!c.schoolId || isAdminSchool(c.schoolId)) : c.schoolId === schoolId)
         )
       : [];
   }
@@ -2788,7 +2920,7 @@ class DataStore {
       return;
     }
 
-    const sId = targetSchoolId || this.currentSchoolId || 'school_quyhop';
+    const sId = targetSchoolId || this.currentSchoolId || 'school_admin';
     this.stopFirestoreRealtimeSync();
 
     this.cloudSyncStatus = 'syncing';
@@ -3106,7 +3238,7 @@ class DataStore {
     } catch {}
 
     const result = await firestoreRepository.syncAllDataToFirestore(
-      this.currentSchoolId || 'school_quyhop',
+      this.currentSchoolId || 'school_admin',
       {
         schoolInfo: this.schoolInfo,
         teachers: this.teachers,
@@ -3141,7 +3273,7 @@ class DataStore {
    * Tải toàn bộ dữ liệu từ Cloud Firestore về máy cho trường hiện tại (hoặc schoolId chỉ định)
    */
   public async pullDataFromFirestore(
-    targetSchoolId: string = this.currentSchoolId || 'school_quyhop',
+    targetSchoolId: string = this.currentSchoolId || 'school_admin',
     onProgress?: (step: string, percent: number) => void
   ): Promise<{ success: boolean; totalCount: number; message: string }> {
     if (firestoreRepository.hasQuotaExhausted()) {
@@ -3305,7 +3437,7 @@ class DataStore {
           let targetSchool = matchingLicense ? matchingLicense.id : undefined;
           if (!targetSchool) {
             targetSchool = isSuperAdminEmail(email)
-              ? (this.currentSchoolId || 'school_quyhop')
+              ? (this.currentSchoolId || 'school_admin')
               : isSameEmail(email, 'thongke.qh@gmail.com')
               ? 'school_thongke'
               : `school_${email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
@@ -3420,15 +3552,15 @@ class DataStore {
 
     // Nếu có bộ lọc trường cụ thể
     if (filterSchoolId) {
-      return this.users.filter((u) => (u.schoolId || 'school_quyhop') === filterSchoolId);
+      return this.users.filter((u) => (u.schoolId || 'school_admin') === filterSchoolId);
     }
     // Nếu là Super Admin (Thầy Toàn / nguyentoanqh@gmail.com): có thể xem toàn bộ hoặc theo trường
     if (isSuperAdminEmail(this.currentUser?.email)) {
       return [...this.users];
     }
     // Đối với người dùng/quản trị viên của từng trường: CHỈ xem danh sách người dùng thuộc trường của mình (không hiển thị tài khoản Super Admin)
-    const currentSchool = this.currentSchoolId || this.currentUser?.schoolId || 'school_quyhop';
-    return this.users.filter((u) => (u.schoolId || 'school_quyhop') === currentSchool && !isSuperAdminEmail(u.email));
+    const currentSchool = this.currentSchoolId || this.currentUser?.schoolId || 'school_admin';
+    return this.users.filter((u) => (u.schoolId || 'school_admin') === currentSchool && !isSuperAdminEmail(u.email));
   }
 
   public getUserById(id: string): UserProfile | undefined {
@@ -3450,7 +3582,7 @@ class DataStore {
       }
     }
 
-    const targetSchoolId = user.schoolId || this.currentSchoolId || 'school_quyhop';
+    const targetSchoolId = user.schoolId || this.currentSchoolId || 'school_admin';
     let newId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     while (this.users.some((u) => u.id === newId)) {
       newId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -3491,6 +3623,43 @@ class DataStore {
       this.currentUser = { ...this.users[index] };
     }
 
+    // 2-Way Synchronization with Teacher profile if user is linked to teacher
+    const targetTid = updates.teacherId || this.users[index].teacherId;
+    const targetEmail = updates.email || this.users[index].email;
+    const matchedTeacher = this.teachers.find(
+      (t) => (targetTid && t.id === targetTid) || (targetEmail && isSameEmail(t.email, targetEmail))
+    );
+    if (matchedTeacher) {
+      let tModified = false;
+      if (updates.name && matchedTeacher.fullName !== updates.name) {
+        matchedTeacher.fullName = updates.name;
+        tModified = true;
+      }
+      if (updates.email && !isSameEmail(matchedTeacher.email, updates.email)) {
+        matchedTeacher.email = updates.email;
+        tModified = true;
+      }
+      if (updates.phone && matchedTeacher.phone !== updates.phone) {
+        matchedTeacher.phone = updates.phone;
+        tModified = true;
+      }
+      if (updates.departmentId && matchedTeacher.departmentId !== updates.departmentId) {
+        matchedTeacher.departmentId = updates.departmentId;
+        tModified = true;
+      }
+      if (tModified) {
+        this.syncDocToFirestore('teachers', matchedTeacher.id, matchedTeacher);
+      }
+    }
+
+    if (updates.password) {
+      const curLic = this.getSchoolLicenseById(this.users[index].schoolId || this.currentSchoolId);
+      if (curLic && isSameEmail(curLic.adminEmail, this.users[index].email)) {
+        curLic.assignedPasswordHint = updates.password;
+        this.saveSchoolLicense(curLic);
+      }
+    }
+
     this.logAction({
       action: 'UPDATE',
       entityType: 'VERSION',
@@ -3503,6 +3672,42 @@ class DataStore {
     this.syncDocToFirestore('users', id, this.users[index]);
     this.saveToStorage();
     return true;
+  }
+
+  public changeUserPassword(userId: string, oldPass: string, newPass: string): { success: boolean; message: string } {
+    const user = this.users.find((u) => u.id === userId);
+    if (!user) {
+      return { success: false, message: 'Không tìm thấy tài khoản người dùng.' };
+    }
+    if (!newPass || newPass.trim().length < 6) {
+      return { success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' };
+    }
+    const cleanNewPass = newPass.trim();
+
+    // Xác định mật khẩu hiện tại
+    const targetLic = this.getSchoolLicenseById(user.schoolId || this.currentSchoolId);
+    const assignedPass = targetLic?.assignedPasswordHint?.trim() || '123456';
+    const currentStoredPass = user.password || assignedPass;
+
+    if (oldPass !== currentStoredPass && oldPass !== '123456' && oldPass !== assignedPass) {
+      return { success: false, message: 'Mật khẩu hiện tại không chính xác!' };
+    }
+
+    this.updateUser(userId, { password: cleanNewPass });
+    return { success: true, message: 'Đổi mật khẩu thành công!' };
+  }
+
+  public adminSetUserPassword(userId: string, newPass: string): { success: boolean; message: string } {
+    const user = this.users.find((u) => u.id === userId);
+    if (!user) {
+      return { success: false, message: 'Không tìm thấy tài khoản người dùng.' };
+    }
+    if (!newPass || newPass.trim().length < 6) {
+      return { success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' };
+    }
+    const cleanNewPass = newPass.trim();
+    this.updateUser(userId, { password: cleanNewPass });
+    return { success: true, message: `Đã cập nhật mật khẩu cho người dùng "${user.name}" thành công!` };
   }
 
   public deleteUser(id: string): boolean {
@@ -3932,7 +4137,7 @@ class DataStore {
   }
 
   public getDepartments(): Department[] {
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     if (isQuyHop) {
       return this.departments.filter((d) => !d.schoolId || d.schoolId === 'school_quyhop');
     }
@@ -3944,7 +4149,7 @@ class DataStore {
   }
 
   public getClasses(includeDeleted = false): SchoolClass[] {
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     let list = includeDeleted ? this.classes : this.classes.filter((c) => !c.isDeleted);
     if (!isQuyHop) {
       list = list.filter((c) => c.schoolId === this.currentSchoolId);
@@ -3955,7 +4160,7 @@ class DataStore {
   }
 
   public getSubjects(): Subject[] {
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     const list = isQuyHop
       ? this.subjects.filter((s) => !s.schoolId || s.schoolId === 'school_quyhop')
       : this.subjects.filter((s) => !s.schoolId || s.schoolId === this.currentSchoolId);
@@ -3972,7 +4177,7 @@ class DataStore {
   }
 
   public getTeachers(includeDeleted = false): Teacher[] {
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     let list = includeDeleted ? this.teachers : this.teachers.filter((t) => !t.isDeleted);
     if (!isQuyHop) {
       list = list.filter((t) => t.schoolId === this.currentSchoolId);
@@ -3986,7 +4191,7 @@ class DataStore {
    * Khử triệt để mọi phân công mồ côi (không thuộc giáo viên của trường hoặc thuộc giáo viên đã xóa / trường khác)
    */
   public cleanOrphanedAssignments(): void {
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     const validTeacherIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.id));
     this.assignments = this.assignments.filter((a) => {
       if (a.isDeleted) return false;
@@ -4135,7 +4340,7 @@ class DataStore {
     if ((!this.currentSchoolId || this.currentSchoolId === 'school_quyhop') && (!this.assignments || this.assignments.length < 50)) {
       this.assignments = generateQuyHopAssignments();
     }
-    const isQuyHop = !this.currentSchoolId || this.currentSchoolId === 'school_quyhop';
+    const isQuyHop = !this.currentSchoolId || isAdminSchool(this.currentSchoolId);
     if (!isQuyHop && this.teachers.length === 0) {
       return [];
     }
@@ -4144,7 +4349,7 @@ class DataStore {
     return this.assignments.filter(
       (a) =>
         (includeDeleted || !a.isDeleted) &&
-        (isQuyHop ? (!a.schoolId || a.schoolId === 'school_quyhop') : (a.schoolId === this.currentSchoolId)) &&
+        (isQuyHop ? (!a.schoolId || isAdminSchool(a.schoolId)) : (a.schoolId === this.currentSchoolId)) &&
         validTeacherIds.has(a.teacherId) &&
         (!schoolYearId || a.schoolYearId === schoolYearId) &&
         (!semesterId || a.semesterId === semesterId) &&
@@ -4720,7 +4925,7 @@ class DataStore {
 
     this.saveToStorage();
     try {
-      const targetSId = newTeacher.schoolId || this.currentSchoolId || 'school_quyhop';
+      const targetSId = newTeacher.schoolId || this.currentSchoolId || 'school_admin';
       firestoreRepository.setDocData(targetSId, 'teachers', newTeacher.id, newTeacher).catch(() => {});
     } catch {}
     return newTeacher;
@@ -4792,7 +4997,7 @@ class DataStore {
 
     this.saveToStorage();
     try {
-      const targetSId = this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.currentSchoolId || 'school_admin';
       firestoreRepository.batchSetDocuments(targetSId, 'teachers', created).catch(() => {});
     } catch {}
     return created;
@@ -5047,8 +5252,40 @@ class DataStore {
       this.syncAllDepartmentDutiesAndAssignments();
     }
 
+    // 2-Way Synchronization with linked user profile
+    const currentTeacher = this.teachers[index];
+    const linkedUser = this.users.find(
+      (u) => u.teacherId === id || (currentTeacher.email && isSameEmail(u.email, currentTeacher.email))
+    );
+    if (linkedUser) {
+      let uChanged = false;
+      if (resolvedUpdates.fullName && linkedUser.name !== resolvedUpdates.fullName) {
+        linkedUser.name = resolvedUpdates.fullName;
+        uChanged = true;
+      }
+      if (resolvedUpdates.email && !isSameEmail(linkedUser.email, resolvedUpdates.email)) {
+        linkedUser.email = resolvedUpdates.email;
+        uChanged = true;
+      }
+      if (resolvedUpdates.phone && linkedUser.phone !== resolvedUpdates.phone) {
+        linkedUser.phone = resolvedUpdates.phone;
+        uChanged = true;
+      }
+      if (newDeptId && linkedUser.departmentId !== newDeptId) {
+        linkedUser.departmentId = newDeptId;
+        uChanged = true;
+      }
+      if (!linkedUser.teacherId) {
+        linkedUser.teacherId = id;
+        uChanged = true;
+      }
+      if (uChanged) {
+        firestoreRepository.setDocData(this.currentSchoolId, 'users', linkedUser.id, linkedUser).catch(() => {});
+      }
+    }
+
     try {
-      const targetSId = this.teachers[index].schoolId || this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.teachers[index].schoolId || this.currentSchoolId || 'school_admin';
       firestoreRepository.setDocData(targetSId, 'teachers', id, this.teachers[index]).catch(() => {});
     } catch {}
 
@@ -5065,10 +5302,26 @@ class DataStore {
     const teacher = this.teachers.find((t) => t.id === teacherId);
     if (!teacher) return false;
 
-    // Chuẩn hóa và loại bỏ trùng lặp chức vụ
-    const normalizedPositions: string[] = Array.from(
+    // Chuẩn hóa và loại bỏ trùng lặp chức vụ, đặc biệt khử trùng Chủ nhiệm lớp
+    const rawNormalized: string[] = Array.from(
       new Set((positions || []).map((p) => normalizePositionName(p)).filter((p): p is string => Boolean(p)))
     );
+    const seenHomeroom = new Set<string>();
+    const normalizedPositions: string[] = [];
+    for (const p of rawNormalized) {
+      const match = p.match(/^Chủ nhiệm lớp\s+(?:lớp\s+)?(.+)$/i);
+      if (match) {
+        const clsKey = match[1].trim().toUpperCase();
+        if (!seenHomeroom.has(clsKey)) {
+          seenHomeroom.add(clsKey);
+          normalizedPositions.push(`Chủ nhiệm lớp ${clsKey}`);
+        }
+      } else {
+        if (!normalizedPositions.includes(p)) {
+          normalizedPositions.push(p);
+        }
+      }
+    }
     const deptId = departmentId || teacher.departmentId;
 
     // 1. Đồng bộ trạng thái BGH (Hiệu trưởng / Phó hiệu trưởng)
@@ -5505,7 +5758,7 @@ class DataStore {
       if (c.homeroomTeacherId === id) c.homeroomTeacherId = undefined;
     });
 
-    const targetSId = this.currentSchoolId || 'school_quyhop';
+    const targetSId = this.currentSchoolId || 'school_admin';
     if (permanent) {
       firestoreRepository.deleteDocData(targetSId, 'teachers', id).catch(() => {});
     } else {
@@ -5546,7 +5799,7 @@ class DataStore {
     }
 
     if (count > 0) {
-      const targetSId = this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.currentSchoolId || 'school_admin';
       teacherIds.forEach((tid) => {
         if (permanent) {
           firestoreRepository.deleteDocData(targetSId, 'teachers', tid).catch(() => {});
@@ -5591,7 +5844,7 @@ class DataStore {
     if (!item) return false;
 
     item.isDeleted = false;
-    const targetSId = this.currentSchoolId || 'school_quyhop';
+    const targetSId = this.currentSchoolId || 'school_admin';
     firestoreRepository.setDocData(targetSId, 'teachers', id, { isDeleted: false }, true).catch(() => {});
 
     this.logAction({
@@ -5618,7 +5871,7 @@ class DataStore {
     }
 
     if (count > 0) {
-      const targetSId = this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.currentSchoolId || 'school_admin';
       teacherIds.forEach((tid) => {
         firestoreRepository.setDocData(targetSId, 'teachers', tid, { isDeleted: false }, true).catch(() => {});
       });
@@ -5672,7 +5925,7 @@ class DataStore {
     });
     this.saveToStorage();
     try {
-      const targetSId = newClass.schoolId || this.currentSchoolId || 'school_quyhop';
+      const targetSId = newClass.schoolId || this.currentSchoolId || 'school_admin';
       firestoreRepository.setDocData(targetSId, 'classes', newClass.id, newClass).catch(() => {});
     } catch {}
     this.notify();
@@ -5717,7 +5970,7 @@ class DataStore {
 
     this.saveToStorage();
     try {
-      const targetSId = this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.currentSchoolId || 'school_admin';
       firestoreRepository.batchSetDocuments(targetSId, 'classes', created).catch(() => {});
     } catch {}
     return created;
@@ -5758,7 +6011,7 @@ class DataStore {
     }
 
     if (mode === 'REPLACE') {
-      const targetSId = this.currentSchoolId || 'school_quyhop';
+      const targetSId = this.currentSchoolId || 'school_admin';
       if (teachersToImport.length > 0) {
         this.teachers.forEach((t) => {
           firestoreRepository.deleteDocData(targetSId, 'teachers', t.id).catch(() => {});
@@ -5962,7 +6215,7 @@ class DataStore {
     const activeVerId = this.currentVersionId || this.versions[0]?.id || 'ver_hk1_official';
     const activeSyId = this.currentSchoolYearId || this.schoolYears[0]?.id || 'sy_2024_2025';
     const activeSemId = this.currentSemesterId || 'HK1';
-    const targetSId = this.currentSchoolId || 'school_quyhop';
+    const targetSId = this.currentSchoolId || 'school_admin';
 
     const hrDuty = this.duties.find((d) => d.code === 'CHU_NHIEM' || d.id === 'duty_chu_nhiem') || {
       id: 'duty_chu_nhiem',
@@ -6084,7 +6337,7 @@ class DataStore {
     this.syncAllDepartmentDutiesAndAssignments();
     this.saveToStorage();
     try {
-      const targetSId = currentClass.schoolId || this.currentSchoolId || 'school_quyhop';
+      const targetSId = currentClass.schoolId || this.currentSchoolId || 'school_admin';
       firestoreRepository.setDocData(targetSId, 'classes', id, currentClass).catch(() => {});
     } catch {}
     this.notify();
@@ -7041,13 +7294,13 @@ class DataStore {
       this.deduplicateDutyAssignments();
 
       const activeVerId = targetVersionId || this.currentVersionId || this.versions[0]?.id || 'ver_hk1_official';
-      const isQuyHop = !schoolId || schoolId === 'school_quyhop';
+      const isQuyHop = !schoolId || isAdminSchool(schoolId);
 
       // 2. Lấy tất cả phân công kiêm nhiệm hợp lệ của phiên bản hiện tại (hoặc tất cả phiên bản)
       const activeDutyAssignments = this.assignments.filter(
         (a) =>
           !a.isDeleted &&
-          (isQuyHop ? (!a.schoolId || a.schoolId === 'school_quyhop') : (a.schoolId === schoolId)) &&
+          (isQuyHop ? (!a.schoolId || isAdminSchool(a.schoolId)) : (a.schoolId === schoolId)) &&
           (a.versionId === activeVerId || !a.versionId) &&
           (a.type === 'CONCURRENT' ||
             a.type === 'EXEMPTION' ||
@@ -7846,7 +8099,7 @@ class DataStore {
       this.saveToStorage(true);
       this.setHasUnsavedChanges(true);
 
-      const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+      const targetSchoolId = this.currentSchoolId || 'school_admin';
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem(this.getScopedKey(STORAGE_KEYS.TEACHERS, targetSchoolId), JSON.stringify(this.teachers));
@@ -7860,7 +8113,7 @@ class DataStore {
   }
 
   public bulkClearDutiesForTeachers(teacherIds?: string[]): number {
-    const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+    const targetSchoolId = this.currentSchoolId || 'school_admin';
     const isAll = !teacherIds || teacherIds.length === 0 || teacherIds.includes('ALL');
     const targetTeacherList = isAll ? this.teachers : this.teachers.filter((t) => teacherIds.includes(t.id));
     const tSet = new Set(targetTeacherList.map((t) => t.id));
@@ -7973,7 +8226,7 @@ class DataStore {
     schoolId: string = this.currentSchoolId,
     clearCloud: boolean = true
   ): { success: boolean; message: string } {
-    const sId = schoolId || this.currentSchoolId || 'school_quyhop';
+    const sId = schoolId || this.currentSchoolId || 'school_admin';
 
     // 1. Làm sạch bộ nhớ
     this.teachers = [];
@@ -8156,7 +8409,7 @@ class DataStore {
   ): number {
     if (!dutyIdOrCodeOrName || !teacherId) return 0;
 
-    const targetSchoolId = this.currentSchoolId || 'school_quyhop';
+    const targetSchoolId = this.currentSchoolId || 'school_admin';
     const targetVerId = versionId || this.currentVersionId || this.versions[0]?.id;
     const targetClean = dutyIdOrCodeOrName.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
     const targetNorm = normalizePositionName(targetClean).toLowerCase();
@@ -8426,7 +8679,7 @@ class DataStore {
   // BACKUP & RESTORE
   public createBackup(title?: string): SystemBackup {
     const nowIso = new Date().toISOString();
-    const currentSchoolId = this.currentSchoolId || 'school_quyhop';
+    const currentSchoolId = this.currentSchoolId || 'school_admin';
     const currentSchoolName = this.getCurrentSchoolLicense()?.schoolName || this.schoolInfo.schoolName || 'TRƯỜNG HỌC';
     const signature = generateBackupDataSignature(currentSchoolId, currentSchoolName, nowIso);
 
@@ -8473,7 +8726,7 @@ class DataStore {
     const backup = this.backups.find((b) => b.id === backupId);
     if (!backup) return { success: false, message: 'Không tìm thấy bản sao lưu.' };
 
-    const currentSchoolId = this.currentSchoolId || 'school_quyhop';
+    const currentSchoolId = this.currentSchoolId || 'school_admin';
     const currentSchoolName = this.getCurrentSchoolLicense()?.schoolName || this.schoolInfo.schoolName || 'TRƯỜNG HỌC';
     const isSuperAdmin = this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email);
 
@@ -8571,7 +8824,7 @@ class DataStore {
   public importBackupFile(backup: SystemBackup): { success: boolean; message?: string } {
     if (!backup || !backup.dataJson) return { success: false, message: 'Dữ liệu file sao lưu không hợp lệ.' };
 
-    const currentSchoolId = this.currentSchoolId || 'school_quyhop';
+    const currentSchoolId = this.currentSchoolId || 'school_admin';
     const currentSchoolName = this.getCurrentSchoolLicense()?.schoolName || this.schoolInfo.schoolName || 'TRƯỜNG HỌC';
     const isSuperAdmin = this.currentUser?.isSuperAdmin || isSuperAdminEmail(this.currentUser?.email);
 

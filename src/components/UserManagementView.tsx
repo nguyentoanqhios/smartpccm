@@ -15,6 +15,7 @@ import {
   Edit2,
   Edit3,
   Eye,
+  EyeOff,
   Plus,
   Trash2,
   Search,
@@ -110,6 +111,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Quản trị đổi mật khẩu người dùng
+  const [pwdTargetUser, setPwdTargetUser] = useState<UserProfile | null>(null);
+  const [adminNewPassword, setAdminNewPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [showAdminPwd, setShowAdminPwd] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -810,6 +817,20 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
 
+                          {/* Reset / Change Password */}
+                          <button
+                            onClick={() => {
+                              setPwdTargetUser(user);
+                              setAdminNewPassword('');
+                              setAdminConfirmPassword('');
+                              setShowAdminPwd(false);
+                            }}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition cursor-pointer"
+                            title="Đổi / Đặt lại mật khẩu cho người dùng này"
+                          >
+                            <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                          </button>
+
                           {/* Duplicate User */}
                           <button
                             onClick={() => handleDuplicateUser(user)}
@@ -1153,6 +1174,110 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <span>Xác nhận xóa {selectedUserIds.length} người dùng</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ĐỔI / ĐẶT LẠI MẬT KHẨU CHO NGƯỜI DÙNG */}
+      {pwdTargetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-gradient-to-r from-amber-600 to-amber-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-amber-200" />
+                <h3 className="font-bold text-sm sm:text-base">
+                  Đổi mật khẩu người dùng
+                </h3>
+              </div>
+              <button
+                onClick={() => setPwdTargetUser(null)}
+                className="p-1 rounded-lg text-amber-200 hover:text-white hover:bg-amber-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!adminNewPassword || adminNewPassword.length < 6) {
+                  showToast('Mật khẩu mới phải có ít nhất 6 ký tự!', 'error');
+                  return;
+                }
+                if (adminNewPassword !== adminConfirmPassword) {
+                  showToast('Xác nhận mật khẩu không khớp!', 'error');
+                  return;
+                }
+                const res = dataStore.adminSetUserPassword(pwdTargetUser.id, adminNewPassword);
+                if (res.success) {
+                  showToast(`Đã đổi mật khẩu cho người dùng "${pwdTargetUser.name}" thành công!`);
+                  setPwdTargetUser(null);
+                } else {
+                  showToast(res.message, 'error');
+                }
+              }}
+              className="p-6 space-y-4 text-xs"
+            >
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <div className="font-bold text-slate-800 text-sm">{pwdTargetUser.name}</div>
+                <div className="text-slate-500 font-mono text-[11px]">{pwdTargetUser.email}</div>
+                <div className="text-slate-400 text-[10px]">Vai trò: {pwdTargetUser.roleTitle || pwdTargetUser.role}</div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Mật khẩu mới <span className="text-rose-600">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showAdminPwd ? 'text' : 'password'}
+                    value={adminNewPassword}
+                    onChange={(e) => setAdminNewPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 font-medium"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPwd(!showAdminPwd)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showAdminPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Xác nhận mật khẩu mới <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type={showAdminPwd ? 'text' : 'password'}
+                  value={adminConfirmPassword}
+                  onChange={(e) => setAdminConfirmPassword(e.target.value)}
+                  placeholder="Nhập lại mật khẩu mới"
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 font-medium"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setPwdTargetUser(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>Cập nhật mật khẩu</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

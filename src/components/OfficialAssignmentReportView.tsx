@@ -133,6 +133,7 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
   const [editOffDay, setEditOffDay] = useState('');
   const [editTutoringInfo, setEditTutoringInfo] = useState('');
   const [editBdHsgInfo, setEditBdHsgInfo] = useState('');
+  const [editEmail, setEditEmail] = useState('');
 
   // Cleaned school year to avoid 'sy_' error (e.g. sy_2026_2027 -> 2026–2027)
   const formattedSchoolYear = useMemo(() => cleanSchoolYear(schoolYear), [schoolYear]);
@@ -204,6 +205,7 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
     setEditOffDay(t.offDay || '');
     setEditTutoringInfo(t.tutoringInfo || '');
     setEditBdHsgInfo(t.bdHsgInfo || '');
+    setEditEmail(t.email || '');
   };
 
   const handleSaveEditTeacher = () => {
@@ -217,6 +219,7 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
       offDay: editOffDay.trim() || undefined,
       tutoringInfo: editTutoringInfo.trim() || undefined,
       bdHsgInfo: editBdHsgInfo.trim() || undefined,
+      email: editEmail.trim() || undefined,
     };
     onUpdateTeacher(updated);
     setEditingTeacher(null);
@@ -441,14 +444,21 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
         <td className="py-2.5 px-2 text-center text-slate-500 font-medium border-r border-slate-200">{index + 1}</td>
         <td className="py-2.5 px-3 font-bold text-slate-900 border-r border-slate-200">
           <div className="flex items-center justify-between gap-1">
-            <button
-              type="button"
-              onClick={() => handleOpenEditTeacher(teacher)}
-              className="font-bold text-slate-900 hover:text-blue-700 hover:underline cursor-pointer text-left transition"
-              title="Bấm để xem / chỉnh sửa hồ sơ & phụ đạo của giáo viên"
-            >
-              {teacher.fullName}
-            </button>
+            <div>
+              <button
+                type="button"
+                onClick={() => handleOpenEditTeacher(teacher)}
+                className="font-bold text-slate-900 hover:text-blue-700 hover:underline cursor-pointer text-left transition"
+                title="Bấm để xem / chỉnh sửa hồ sơ & phụ đạo của giáo viên"
+              >
+                {teacher.fullName}
+              </button>
+              {teacher.email && (
+                <div className="text-[10px] text-slate-400 font-mono font-normal">
+                  {teacher.email}
+                </div>
+              )}
+            </div>
             {onUpdateTeacher && (
               <button
                 type="button"
@@ -978,6 +988,17 @@ export const OfficialAssignmentReportView: React.FC<OfficialAssignmentReportView
                   onChange={(e) => setEditStartYear(e.target.value ? parseInt(e.target.value, 10) : '')}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600 focus:outline-none"
                   placeholder="VD: 2009"
+                />
+              </div>
+
+              <div className="col-span-2">
+                <label className="block font-bold text-slate-700 mb-1">Địa chỉ Email (Đồng bộ tài khoản):</label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium focus:ring-2 focus:ring-blue-600 focus:outline-none font-mono text-xs"
+                  placeholder="VD: giaovien@thcsquyhop.edu.vn"
                 />
               </div>
 

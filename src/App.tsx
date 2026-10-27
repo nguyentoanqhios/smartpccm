@@ -176,7 +176,7 @@ export default function App() {
       if (!currentLic && targetSchool === 'school_quyhop') {
         dataStore.saveSchoolLicense({
           id: 'school_quyhop',
-          schoolName: 'TRƯỜNG THCS QUỲ HỢP',
+          schoolName: 'TRƯỜNG THCS ADMIN',
           adminEmail: 'nguyentoanqh@gmail.com',
           adminName: 'Thầy Nguyễn Văn Toàn',
           assignedPasswordHint: '123456',
@@ -295,7 +295,7 @@ export default function App() {
       }
 
       dataStore.restoreQuyHopData();
-      dataStore.setSchoolId('school_quyhop');
+      dataStore.setSchoolId('school_admin');
 
       if (auth.currentUser) {
         const email = auth.currentUser.email || '';
@@ -304,7 +304,7 @@ export default function App() {
           name: auth.currentUser.displayName || (isSuper ? 'Thầy Nguyễn Văn Toàn' : 'Quản trị viên trường'),
           email: email,
           authUid: auth.currentUser.uid,
-          schoolId: 'school_quyhop',
+          schoolId: 'school_admin',
           role: 'admin',
           roleTitle: isSuper ? 'Chủ sở hữu & Quản trị viên Tối cao' : 'Quản trị viên trường',
           permission: 'edit',
@@ -316,7 +316,7 @@ export default function App() {
       }
 
       dataStore.loadLicensesFromCloud().catch(() => {});
-      dataStore.initFirestoreRealtimeSync('school_quyhop');
+      dataStore.initFirestoreRealtimeSync('school_admin');
 
       setAuthSyncError(null);
       setTimeout(() => {
@@ -650,7 +650,7 @@ export default function App() {
     if (isSameEmail(email, 'thongke.qh@gmail.com') || isSuperAdminEmail(email)) {
       const activeSchool = dataStore.getSchoolId() || 'school_quyhop';
       const existing = dataStore.getSchoolLicenseById(activeSchool);
-      const name = existing?.schoolName || (activeSchool === 'school_quyhop' ? 'TRƯỜNG THCS QUỲ HỢP' : activeSchool === 'school_thongke' ? 'TRƯỜNG THCS THỐNG KÊ' : activeSchool);
+      const name = existing?.schoolName || (activeSchool === 'school_quyhop' ? 'TRƯỜNG THCS ADMIN' : activeSchool === 'school_thongke' ? 'TRƯỜNG THCS THỐNG KÊ' : activeSchool);
       dataStore.saveSchoolLicense({
         id: activeSchool,
         schoolName: name,

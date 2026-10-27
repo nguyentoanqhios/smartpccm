@@ -44,6 +44,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Briefcase,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import {
   SchoolClass,
@@ -2819,6 +2821,7 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                     <th className="py-2.5 px-3">Mã GV</th>
                     <th className="py-2.5 px-3">Họ và tên</th>
                     <th className="py-2.5 px-3 text-center">Tên TKB</th>
+                    <th className="py-2.5 px-3">Email</th>
                     <th className="py-2.5 px-3">Vị trí công việc</th>
                     <th className="py-2.5 px-3">Tổ chuyên môn</th>
                     <th className="py-2.5 px-3">Nơi làm việc</th>
@@ -2859,6 +2862,16 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                           >
                             {tkbName}
                           </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700 text-xs font-mono">
+                          {t.email ? (
+                            <span className="flex items-center gap-1.5 text-slate-700">
+                              <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              <span className="truncate max-w-[150px]" title={t.email}>{t.email}</span>
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">Chưa có</span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 min-w-[150px]">
                           {positions.length > 0 ? (
@@ -7132,6 +7145,36 @@ export const BulkManagementView: React.FC<BulkManagementViewProps> = ({
                     value={editTeacherQuota}
                     onChange={(e) => setEditTeacherQuota(parseFloat(e.target.value) || 0)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 font-bold text-slate-800 focus:bg-white focus:border-blue-500 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Email & Phone */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                    <Mail className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Địa chỉ Email</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={editTeacherEmail}
+                    onChange={(e) => setEditTeacherEmail(e.target.value)}
+                    placeholder="VD: gv.toan@gmail.com"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 font-mono text-xs text-slate-800 focus:bg-white focus:border-blue-500 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                    <Phone className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Số điện thoại</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editTeacherPhone}
+                    onChange={(e) => setEditTeacherPhone(e.target.value)}
+                    placeholder="VD: 0987 654 321"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:bg-white focus:border-blue-500 transition"
                   />
                 </div>
               </div>
