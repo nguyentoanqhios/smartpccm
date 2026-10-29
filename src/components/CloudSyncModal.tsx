@@ -138,11 +138,15 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
     setPushProgressStep('Đang khởi tạo kết nối Cloud Firestore & Cloudflare an toàn...');
 
     try {
-      // 1. Đồng bộ Firestore
-      const firestoreRes = await dataStore.syncCurrentDataToFirestore((step, percent) => {
-        setPushProgressStep(step);
-        setPushProgressPercent(Math.min(85, percent));
-      });
+      // 1. Đồng bộ Firestore với timeout bảo vệ 60s
+      const firestoreRes = await withTimeout(
+        dataStore.syncCurrentDataToFirestore((step, percent) => {
+          setPushProgressStep(step);
+          setPushProgressPercent(Math.min(95, percent));
+        }),
+        60000,
+        'Quá thời gian đồng bộ lên Cloud (60s). Dữ liệu phân công của bạn đã được bảo toàn 100% trên thiết bị.'
+      );
 
       // 2. Nếu cấu hình Cloudflare Worker tồn tại, đẩy bản sao lưu multi-tenant lên KV
       if (cfWorkerUrl.trim()) {
@@ -208,11 +212,15 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
     setPullProgressStep(`Đang kết nối và kiểm tra bản lưu trường [${targetSchoolId}] trên Đám mây...`);
 
     try {
-      // 1. Ưu tiên kéo từ Cloud Firestore
-      const pullRes = await dataStore.pullDataFromFirestore(targetSchoolId, (step, percent) => {
-        setPullProgressStep(step);
-        setPullProgressPercent(percent);
-      });
+      // 1. Ưu tiên kéo từ Cloud Firestore với timeout bảo vệ 45s
+      const pullRes = await withTimeout(
+        dataStore.pullDataFromFirestore(targetSchoolId, (step, percent) => {
+          setPullProgressStep(step);
+          setPullProgressPercent(percent);
+        }),
+        45000,
+        'Quá thời gian tải dữ liệu từ Cloud Firestore (45s).'
+      );
 
       // 2. Nếu Firestore chưa có và Worker có cấu hình, kéo từ Cloudflare KV
       if (!pullRes.success && cfWorkerUrl.trim()) {

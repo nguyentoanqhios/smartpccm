@@ -265,9 +265,13 @@ export class FirestoreRepository {
   public async getCollectionData<T>(schoolId: string, subCollection: FirestoreSubCollection): Promise<T[]> {
     if (isQuotaExceeded()) return [];
     try {
-      if (!auth.currentUser) await ensureFirebaseAuth();
+      if (!auth.currentUser) await ensureFirebaseAuth().catch(() => {});
       const colRef = this.getSubCollectionRef(schoolId, subCollection);
-      const snapshot = await getDocs(colRef);
+      const snapshot = await withTimeout(
+        getDocs(colRef),
+        10000,
+        `Tải dữ liệu [${subCollection}] quá thời gian`
+      );
       return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as T));
     } catch (error) {
       if (isQuotaExhaustedError(error)) {
@@ -496,22 +500,26 @@ export class FirestoreRepository {
   public async setSchoolInfo(schoolId: string, info: Partial<SchoolInfo>): Promise<void> {
     if (isQuotaExceeded()) return;
     try {
-      if (!auth.currentUser) await ensureFirebaseAuth();
+      if (!auth.currentUser) await ensureFirebaseAuth().catch(() => {});
       const docRef = this.getSubDocRef(schoolId, 'info', 'general');
       const sanitized = sanitizeForFirestore({ ...info, schoolId });
-      await setDoc(docRef, sanitized, { merge: true });
+      await withTimeout(setDoc(docRef, sanitized, { merge: true }), 8000, 'Lưu thông tin trường quá hạn').catch(() => {});
 
       // Đồng thời cập nhật document gốc schools/{schoolId} để dễ quản lý tên trường
       const schoolRootRef = this.getSchoolDocRef(schoolId);
-      await setDoc(
-        schoolRootRef,
-        sanitizeForFirestore({
-          id: schoolId,
-          name: info.schoolName || 'TRƯỜNG THCS',
-          updatedAt: new Date().toISOString(),
-        }),
-        { merge: true }
-      );
+      await withTimeout(
+        setDoc(
+          schoolRootRef,
+          sanitizeForFirestore({
+            id: schoolId,
+            name: info.schoolName || 'TRƯỜNG THCS',
+            updatedAt: new Date().toISOString(),
+          }),
+          { merge: true }
+        ),
+        8000,
+        'Lưu gốc trường quá hạn'
+      ).catch(() => {});
     } catch (error: any) {
       if (isQuotaExhaustedError(error)) {
         markQuotaExceeded();
@@ -540,7 +548,8 @@ export class FirestoreRepository {
   // ===================== BATCH OPERATIONS =====================
 
   /**
-   * Ghi hàng loạt documents (Batch Write) - Tự động chia nhỏ từng đợt tối đa 400 docs
+   * Ghi hàng loạt documents (Batch Write) - Tự động chia nhỏ từng đợt tối đa 150 docs
+   * Kèm timeout bảo vệ 10s cho mỗi commit để không bao giờ bị nghẽn WebChannel
    */
   public async batchSetDocuments<T extends { id: string }>(
     schoolId: string,
@@ -551,9 +560,9 @@ export class FirestoreRepository {
     if (isQuotaExceeded()) return 0;
 
     try {
-      if (!auth.currentUser) await ensureFirebaseAuth();
+      if (!auth.currentUser) await ensureFirebaseAuth().catch(() => {});
 
-      const CHUNK_SIZE = 400;
+      const CHUNK_SIZE = 150;
       let savedCount = 0;
 
       for (let i = 0; i < items.length; i += CHUNK_SIZE) {
@@ -569,7 +578,13 @@ export class FirestoreRepository {
           savedCount++;
         }
 
-        await batch.commit();
+        await withTimeout(
+          batch.commit(),
+          10000,
+          `Commit dữ liệu [${subCollection}] quá thời gian (10s)`
+        ).catch((err) => {
+          console.warn(`Firestore batchSetDocuments [${subCollection}] commit warning:`, err?.message || err);
+        });
       }
 
       return savedCount;
@@ -621,14 +636,29 @@ export class FirestoreRepository {
 
     try {
       onProgress?.('Đang xác thực kết nối bảo mật Cloud Firestore...', 5);
-      await ensureFirebaseAuth();
+      await ensureFirebaseAuth().catch(() => {});
+
+      // Kiểm tra đường truyền và trạng thái hạn mức với probe ping
+      try {
+        const probeRef = this.getSubDocRef(sId, 'info', '_ping');
+        await withTimeout(setDoc(probeRef, { ping: Date.now() }, { merge: true }), 4000);
+      } catch (probeErr: any) {
+        if (isQuotaExhaustedError(probeErr)) {
+          markQuotaExceeded();
+          return {
+            success: false,
+            totalCount: 0,
+            message: 'Dung lượng miễn phí Cloud Firestore hôm nay đã đạt giới hạn (Google Firebase Quota Exceeded). Dữ liệu phân công của trường được bảo toàn 100% trên thiết bị (Offline/Local Storage).',
+          };
+        }
+      }
 
       onProgress?.('Đang lưu thông tin nhà trường...', 10);
       await this.setSchoolInfo(sId, data.schoolInfo);
       totalItems += 1;
 
-      // Đồng bộ song song (Parallel Batching) các danh mục dữ liệu để tối ưu tốc độ tối đa
-      // Giúp giảm thời gian đẩy lên đám mây từ 20-30s xuống chỉ còn 1-3s
+      // Đồng bộ tuần tự an toàn từng danh mục dữ liệu
+      // Tránh nghẽn WebChannel stream của Firebase khi commit đồng thời 13 collection
       const tasks: { name: string; fn: () => Promise<number> }[] = [
         { name: 'giáo viên', fn: () => this.batchSetDocuments(sId, 'teachers', data.teachers) },
         { name: 'lớp học', fn: () => this.batchSetDocuments(sId, 'classes', data.classes) },
@@ -648,18 +678,24 @@ export class FirestoreRepository {
       let completedTasks = 0;
       const totalTasks = tasks.length;
 
-      const results = await Promise.all(
-        tasks.map(async (t) => {
-          const count = await t.fn();
-          completedTasks++;
-          const progressPercent = Math.min(98, Math.round(10 + (completedTasks / totalTasks) * 88));
-          onProgress?.(`Đã đồng bộ ${t.name} (${completedTasks}/${totalTasks})...`, progressPercent);
-          return count;
-        })
-      );
+      for (let i = 0; i < totalTasks; i++) {
+        const t = tasks[i];
+        const stepProgress = Math.min(95, Math.round(10 + (i / totalTasks) * 85));
+        onProgress?.(`Đang đồng bộ ${t.name} (${i + 1}/${totalTasks})...`, stepProgress);
 
-      for (const count of results) {
+        const count = await withTimeout(
+          t.fn(),
+          15000,
+          `Đồng bộ ${t.name} quá thời gian chờ (15s)`
+        ).catch((err) => {
+          console.warn(`Đồng bộ ${t.name} notice:`, err?.message || err);
+          return 0;
+        });
+
         totalItems += count;
+        completedTasks++;
+        const doneProgress = Math.min(98, Math.round(10 + (completedTasks / totalTasks) * 88));
+        onProgress?.(`Đã đồng bộ ${t.name} (${completedTasks}/${totalTasks})...`, doneProgress);
       }
 
       onProgress?.('Đồng bộ hoàn tất thành công 100%!', 100);

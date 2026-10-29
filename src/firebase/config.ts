@@ -102,15 +102,21 @@ export function withTimeout<T>(
 
 let ongoingAuthPromise: Promise<User | null> | null = null;
 
+let authTooManyRequestsUntil = 0;
+
 /**
  * Đảm bảo luôn có phiên xác thực hợp lệ trên Firebase Authentication
  * Tránh lỗi bảo mật "Missing or insufficient permissions" khi đọc/ghi Cloud Firestore
  * CHỈ CHẠY THEO YÊU CẦU (on-demand) khi thao tác với Firestore, không chiếm quyền người dùng.
  * Có timeout bảo vệ để không bao giờ treo ứng dụng nếu mạng chậm hoặc Auth bị chặn.
  */
-export async function ensureFirebaseAuth(timeoutMs: number = 4000): Promise<User | null> {
+export async function ensureFirebaseAuth(timeoutMs: number = 3000): Promise<User | null> {
   // Nếu đã có phiên đăng nhập (người dùng thật hoặc tài khoản sync), dùng luôn
   if (auth.currentUser) {
+    return auth.currentUser;
+  }
+  // Nếu Firebase Auth đang bị rate-limit tạm thời, không chờ đợi gây treo ứng dụng
+  if (Date.now() < authTooManyRequestsUntil) {
     return auth.currentUser;
   }
   if (ongoingAuthPromise) {
@@ -130,17 +136,21 @@ export async function ensureFirebaseAuth(timeoutMs: number = 4000): Promise<User
         try {
           const res = await withTimeout(
             signInWithEmailAndPassword(auth, cred.email, cred.pass),
-            Math.min(timeoutMs, 3000),
+            Math.min(timeoutMs, 2000),
             'Xác thực đăng nhập đồng bộ quá thời gian chờ'
           );
           return res.user;
         } catch (signInErr: any) {
+          if (signInErr?.code === 'auth/too-many-requests') {
+            authTooManyRequestsUntil = Date.now() + 60000; // 60s cooldown
+            break;
+          }
           // Nếu tài khoản chưa tồn tại thì thử tạo mới
           if (signInErr?.code === 'auth/user-not-found') {
             try {
               const resCreate = await withTimeout(
                 createUserWithEmailAndPassword(auth, cred.email, cred.pass),
-                Math.min(timeoutMs, 3000),
+                Math.min(timeoutMs, 2000),
                 'Tạo tài khoản đồng bộ quá thời gian chờ'
               );
               return resCreate.user;
