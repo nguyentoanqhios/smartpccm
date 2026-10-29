@@ -25,6 +25,7 @@ export const auth = getAuth(app);
 export const db = (() => {
   try {
     return initializeFirestore(app, {
+      experimentalForceLongPolling: true,
       localCache: memoryLocalCache(),
     });
   } catch {

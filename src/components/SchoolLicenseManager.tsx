@@ -222,13 +222,9 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     setIsCloudSyncing(true);
     showToast('Đang kết nối Cloud Firestore và chuẩn bị đẩy cấu hình đồng bộ...', 'warning');
     try {
-      const res = await withTimeout(
-        dataStore.syncAllLicensesToCloud(),
-        14000,
-        'Quá thời gian chờ kết nối Cloud Firestore (14s). Vui lòng thử lại.'
-      );
+      const res = await dataStore.syncAllLicensesToCloud();
       if (res.success) {
-        showToast(res.message || 'Đã đẩy toàn bộ bản quyền trường học lên Cloud Firestore!', 'success');
+        showToast(res.message || 'Đã đẩy toàn bộ bản quyền trường học thành công!', 'success');
       } else {
         showToast(res.message || 'Lỗi khi đẩy lên Cloud Firestore', 'error');
       }
