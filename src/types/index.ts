@@ -457,6 +457,7 @@ export interface SystemBackup {
   teacherCount: number;
   assignmentCount: number;
   tenantId?: string; // Mã trường sở hữu bản sao lưu (Chống nạp chéo giữa các trường)
+  schoolId?: string; // Mã trường sở hữu bản sao lưu (hỗ trợ cả schoolId và tenantId)
   schoolName?: string; // Tên trường sở hữu bản sao lưu
   signature?: string; // Chữ ký số bảo mật chống giả mạo file backup
   dataJson: string;

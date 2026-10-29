@@ -16,8 +16,6 @@ import {
   writeBatch,
   Unsubscribe,
   setLogLevel,
-  disableNetwork,
-  enableNetwork,
 } from 'firebase/firestore';
 import { db, auth, ensureFirebaseAuth, withTimeout } from '../firebase/config';
 import {
@@ -142,9 +140,6 @@ export function markQuotaExceeded(): void {
     try {
       setLogLevel('silent');
     } catch {}
-    try {
-      disableNetwork(db).catch(() => {});
-    } catch {}
     // Kích hoạt tất cả listener để dừng ngay lập tức mọi sync listener đang chạy
     _quotaListeners.forEach((fn) => {
       try {
@@ -166,7 +161,6 @@ export function isQuotaExceeded(): boolean {
           _quotaExceededUntil = Number(stored);
           try {
             setLogLevel('silent');
-            disableNetwork(db).catch(() => {});
           } catch {}
         }
       } catch {}
@@ -177,7 +171,6 @@ export function isQuotaExceeded(): boolean {
     try {
       sessionStorage.removeItem('pccm_firestore_quota_exceeded');
       localStorage.removeItem('pccm_firestore_quota_exceeded');
-      enableNetwork(db).catch(() => {});
     } catch {}
   }
   return _isQuotaExceeded;
@@ -189,7 +182,6 @@ export function resetQuotaExceeded(): void {
   try {
     sessionStorage.removeItem('pccm_firestore_quota_exceeded');
     localStorage.removeItem('pccm_firestore_quota_exceeded');
-    enableNetwork(db).catch(() => {});
   } catch {}
 }
 

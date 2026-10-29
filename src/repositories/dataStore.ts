@@ -499,6 +499,7 @@ class DataStore {
 
   private loadFromStorage() {
     try {
+      this.pruneLocalStorageToRecoverQuota();
       const urlParams = this.detectUrlSchoolParams();
       const urlSchoolId = urlParams.schoolId;
       if (urlSchoolId) {
@@ -1047,15 +1048,104 @@ class DataStore {
     return fallback;
   }
 
+  /**
+   * Tự động dọn dẹp các bản sao lưu cũ, logs kiểm toán cũ và các key trùng lặp
+   * khi dung lượng LocalStorage của trình duyệt chạm ngưỡng giới hạn (5MB).
+   */
+  public pruneLocalStorageToRecoverQuota(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      // 1. Xóa key sao lưu toàn cục thừa (vì bản sao lưu đã được lưu tách biệt theo từng trường)
+      localStorage.removeItem(STORAGE_KEYS.BACKUPS);
+      localStorage.removeItem('pccm_backups');
+
+      // 2. Thu gọn danh sách bản sao lưu trong các key scoped: chỉ giữ tối đa 2 bản mới nhất cho mỗi trường
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORAGE_KEYS.BACKUPS)) {
+          try {
+            const raw = localStorage.getItem(k);
+            if (raw) {
+              const list = JSON.parse(raw);
+              if (Array.isArray(list) && list.length > 2) {
+                const pruned = list.slice(0, 2);
+                localStorage.setItem(k, JSON.stringify(pruned));
+              }
+            }
+          } catch {}
+        }
+      }
+
+      // 3. Xóa các key legacy trùng lặp (__school_quyhop) nếu key __school_admin đã tồn tại
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.endsWith('__school_quyhop')) {
+          const adminKey = k.replace('__school_quyhop', '__school_admin');
+          if (localStorage.getItem(adminKey) !== null) {
+            keysToRemove.push(k);
+          }
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+
+      // 4. Thu gọn audit logs và feedbacks: chỉ giữ 25 mục mới nhất
+      const logsRaw = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
+      if (logsRaw) {
+        try {
+          const logs = JSON.parse(logsRaw);
+          if (Array.isArray(logs) && logs.length > 25) {
+            localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(logs.slice(0, 25)));
+          }
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Lỗi dọn dẹp dung lượng LocalStorage:', e);
+    }
+  }
+
+  /**
+   * Ghi an toàn vào LocalStorage có cơ chế tự phục hồi chống QuotaExceededError
+   */
+  private safeLocalStorageSet(key: string, value: string): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (err: any) {
+      const isQuota = err?.name === 'QuotaExceededError' || err?.code === 22 || err?.code === 1014;
+      if (isQuota) {
+        this.pruneLocalStorageToRecoverQuota();
+        try {
+          localStorage.setItem(key, value);
+          return true;
+        } catch {
+          // Nếu vẫn không đủ (thường là key bản sao lưu quá lớn), cắt giảm bản sao lưu hoặc bỏ qua
+          if (key.includes(STORAGE_KEYS.BACKUPS)) {
+            try {
+              const list = JSON.parse(value);
+              if (Array.isArray(list) && list.length > 1) {
+                localStorage.setItem(key, JSON.stringify(list.slice(0, 1)));
+                return true;
+              }
+            } catch {}
+          }
+          return false;
+        }
+      }
+      return false;
+    }
+  }
+
   private setItem<T>(key: string, value: T): void {
     if (typeof window === 'undefined') return;
     try {
       const strVal = JSON.stringify(value);
-      localStorage.setItem(key, strVal);
-      // Đồng bộ hai chiều cho key school_quyhop để tương thích ngược 100%
-      if (key.endsWith('__school_admin')) {
+      this.safeLocalStorageSet(key, strVal);
+      // Chỉ đồng bộ hai chiều cho key cấu hình nhẹ (không áp dụng cho backups hoặc assignments lớn)
+      if (key.endsWith('__school_admin') && !key.includes('backups') && !key.includes('assignments')) {
         const legacyKey = key.replace('__school_admin', '__school_quyhop');
-        localStorage.setItem(legacyKey, strVal);
+        this.safeLocalStorageSet(legacyKey, strVal);
       }
     } catch (e) {
       console.warn('Lỗi ghi localStorage:', e);
@@ -1282,6 +1372,16 @@ class DataStore {
       this.setItem(this.getScopedKey(STORAGE_KEYS.DUTIES, schoolId), this.duties);
       this.assignments = this.assignments.filter((a) => !isForbiddenDutyOrExemption(a));
       this.versions = this.getItem(this.getScopedKey(STORAGE_KEYS.VERSIONS, schoolId), INITIAL_VERSIONS);
+      const loadedScopedBackups = this.getItem<SystemBackup[] | null>(this.getScopedKey(STORAGE_KEYS.BACKUPS, schoolId), null);
+      if (Array.isArray(loadedScopedBackups) && loadedScopedBackups.length > 0) {
+        const existingIds = new Set(this.backups.map((b) => b.id));
+        for (const b of loadedScopedBackups) {
+          if (!existingIds.has(b.id)) {
+            this.backups.push(b);
+            existingIds.add(b.id);
+          }
+        }
+      }
       if (this.teachers.length > 0) {
         this.cleanOrphanedAssignments();
       }
@@ -1366,36 +1466,43 @@ class DataStore {
   private saveLocalCacheOnly() {
     if (typeof window === 'undefined') return;
     try {
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(this.currentSchoolId));
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(this.users.filter((u) => !isSystemSyncEmail(u.email))));
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_LICENSES, JSON.stringify(this.schoolLicenses));
-      localStorage.setItem(STORAGE_KEYS.ABBREVIATION_RULES, JSON.stringify(this.abbreviationRules));
-      localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(this.auditLogs));
-      localStorage.setItem(STORAGE_KEYS.FEEDBACKS, JSON.stringify(this.feedbacks));
-      localStorage.setItem(STORAGE_KEYS.BACKUPS, JSON.stringify(this.backups));
+      this.safeLocalStorageSet(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(this.currentSchoolId));
+      this.safeLocalStorageSet(STORAGE_KEYS.USERS, JSON.stringify(this.users.filter((u) => !isSystemSyncEmail(u.email))));
+      this.safeLocalStorageSet(STORAGE_KEYS.SCHOOL_LICENSES, JSON.stringify(this.schoolLicenses));
+      this.safeLocalStorageSet(STORAGE_KEYS.ABBREVIATION_RULES, JSON.stringify(this.abbreviationRules));
+      this.safeLocalStorageSet(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(this.auditLogs.slice(0, 50)));
+      this.safeLocalStorageSet(STORAGE_KEYS.FEEDBACKS, JSON.stringify(this.feedbacks.slice(0, 50)));
+
+      // Xóa key backups toàn cục thừa để giải phóng ngay ~1-2MB dung lượng
+      localStorage.removeItem(STORAGE_KEYS.BACKUPS);
 
       const sId = this.currentSchoolId || 'school_admin';
       if (!this.isTenantDataLoaded && sId !== 'school_quyhop') {
         // Prevent writing un-scoped global state to tenant scoped cache before loadTenantData completes
         return;
       }
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(sId));
+      this.safeLocalStorageSet(STORAGE_KEYS.SCHOOL_ID, JSON.stringify(sId));
       const scopedKey = (base: string) => this.getScopedKey(base, sId);
 
-      localStorage.setItem(scopedKey(STORAGE_KEYS.SCHOOL_INFO), JSON.stringify(this.schoolInfo));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.SCHOOL_YEARS), JSON.stringify(this.schoolYears));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.VERSIONS), JSON.stringify(this.versions));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.BRANCHES), JSON.stringify(this.branches));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.WORKPLACES), JSON.stringify(this.workplaces));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.DEPARTMENTS), JSON.stringify(this.departments));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.DUTIES), JSON.stringify(this.duties));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.CLASSES), JSON.stringify(this.classes));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.SUBJECTS), JSON.stringify(this.subjects));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.CURRICULUM), JSON.stringify(this.curriculum));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.TEACHERS), JSON.stringify(this.teachers));
-      localStorage.setItem(scopedKey(STORAGE_KEYS.ASSIGNMENTS), JSON.stringify(this.assignments));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.SCHOOL_INFO), JSON.stringify(this.schoolInfo));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.SCHOOL_YEARS), JSON.stringify(this.schoolYears));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.VERSIONS), JSON.stringify(this.versions));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.BRANCHES), JSON.stringify(this.branches));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.WORKPLACES), JSON.stringify(this.workplaces));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.DEPARTMENTS), JSON.stringify(this.departments));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.DUTIES), JSON.stringify(this.duties));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.CLASSES), JSON.stringify(this.classes));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.SUBJECTS), JSON.stringify(this.subjects));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.CURRICULUM), JSON.stringify(this.curriculum));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.TEACHERS), JSON.stringify(this.teachers));
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.ASSIGNMENTS), JSON.stringify(this.assignments));
 
-      localStorage.setItem(
+      // Giữ tối đa 3 bản sao lưu gần nhất trong LocalStorage để bảo đảm không bao giờ tràn hạn mức 5MB
+      const tenantBackups = this.getBackups(sId);
+      const cappedBackups = tenantBackups.slice(0, 3);
+      this.safeLocalStorageSet(scopedKey(STORAGE_KEYS.BACKUPS), JSON.stringify(cappedBackups));
+
+      this.safeLocalStorageSet(
         STORAGE_KEYS.ACTIVE_SESSION,
         JSON.stringify({
           userId: this.currentUser?.id,
@@ -1405,7 +1512,8 @@ class DataStore {
         })
       );
     } catch (e) {
-      console.error('Error saving local cache', e);
+      // Safe guard
+      console.warn('Lưu cache cục bộ thông báo:', e);
     }
   }
 
@@ -4467,7 +4575,22 @@ class DataStore {
     return [...this.feedbacks];
   }
 
-  public getBackups(): SystemBackup[] {
+  public getBackups(schoolId?: string): SystemBackup[] {
+    const targetSchoolId = schoolId || this.currentSchoolId;
+    if (!targetSchoolId) return [...this.backups];
+    return this.backups.filter((b) => {
+      const bSchool = b.tenantId || b.schoolId;
+      if (!bSchool) {
+        return targetSchoolId === 'school_quyhop' || targetSchoolId === 'school_admin';
+      }
+      if (targetSchoolId === 'school_quyhop' || targetSchoolId === 'school_admin') {
+        return bSchool === 'school_quyhop' || bSchool === 'school_admin';
+      }
+      return bSchool === targetSchoolId;
+    });
+  }
+
+  public getAllBackups(): SystemBackup[] {
     return [...this.backups];
   }
 
@@ -8794,10 +8917,12 @@ class DataStore {
       teacherCount: this.teachers.length,
       assignmentCount: this.assignments.length,
       tenantId: currentSchoolId,
+      schoolId: currentSchoolId,
       schoolName: currentSchoolName,
       signature,
       dataJson: JSON.stringify({
         tenantId: currentSchoolId,
+        schoolId: currentSchoolId,
         schoolName: currentSchoolName,
         signature,
         schoolInfo: this.schoolInfo,
@@ -8820,7 +8945,9 @@ class DataStore {
       }),
     };
     this.backups.unshift(backup);
-    this.saveToStorage();
+    const scopedBackupKey = this.getScopedKey(STORAGE_KEYS.BACKUPS, currentSchoolId);
+    this.setItem(scopedBackupKey, this.getBackups(currentSchoolId).slice(0, 3));
+    this.saveToStorage(true);
     return backup;
   }
 

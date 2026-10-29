@@ -6,7 +6,7 @@
  * - Phục hồi từ file sao lưu trên máy tính.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   History,
   X,
@@ -45,8 +45,9 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
   onClose,
   onRestored,
 }) => {
+  const currentSchoolId = dataStore.getSchoolId();
   const [activeTab, setActiveTab] = useState<'LIST' | 'EXPORT_FILE' | 'IMPORT_FILE'>('LIST');
-  const [backups, setBackups] = useState<SystemBackup[]>(() => dataStore.getBackups());
+  const [backups, setBackups] = useState<SystemBackup[]>(() => dataStore.getBackups(dataStore.getSchoolId()));
   const [versions, setVersions] = useState<AssignmentVersion[]>(() => dataStore.getVersions());
   const [newBackupTitle, setNewBackupTitle] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -61,22 +62,35 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const schoolInfo = dataStore.getSchoolInfo();
-  const currentSchoolId = dataStore.getSchoolId();
   const currentUser = dataStore.getCurrentUser();
   const isSuperAdmin = isSuperAdminEmail(currentUser?.email) || Boolean(currentUser?.isSuperAdmin);
   // Khôi phục dữ liệu gốc THCS Quỳ Hợp trong quản lý phiên bản và lịch sử sao lưu (chỉ hiển thị khi đang làm việc tại trường Quỳ Hợp)
   const isQuyHopBenchmarkVisible = currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin';
 
+  // Lọc chính xác danh sách bản sao lưu theo trường học (hỗ trợ cả tenantId và schoolId)
+  const schoolBackups = useMemo(() => {
+    return backups.filter((b) => {
+      const bSchool = b.tenantId || b.schoolId;
+      if (!bSchool) {
+        return currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin';
+      }
+      if (currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin') {
+        return bSchool === 'school_quyhop' || bSchool === 'school_admin';
+      }
+      return bSchool === currentSchoolId;
+    });
+  }, [backups, currentSchoolId]);
+
   useEffect(() => {
     if (!isOpen) return;
-    setBackups(dataStore.getBackups());
+    setBackups(dataStore.getBackups(currentSchoolId));
     setVersions(dataStore.getVersions());
     const unsub = dataStore.subscribe(() => {
-      setBackups(dataStore.getBackups());
+      setBackups(dataStore.getBackups(currentSchoolId));
       setVersions(dataStore.getVersions());
     });
     return unsub;
-  }, [isOpen]);
+  }, [isOpen, currentSchoolId]);
 
   // Tạo bản sao lưu mới ngay lập tức
   const handleCreateSnapshot = () => {
@@ -88,7 +102,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
       const backup = dataStore.createBackup(title);
       setNewBackupTitle('');
       toastService.success(`Đã lưu phiên bản snapshot mới: "${backup.title}"!`);
-      setBackups(dataStore.getBackups());
+      setBackups(dataStore.getBackups(currentSchoolId));
     } catch (err: any) {
       toastService.error(err?.message || 'Lỗi khi tạo bản sao lưu');
     } finally {
@@ -134,7 +148,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
   const handleDeleteBackup = (backupId: string, title: string) => {
     if (window.confirm(`Bạn có chắc muốn xóa bản sao lưu "${title}"?`)) {
       dataStore.deleteBackup(backupId);
-      setBackups(dataStore.getBackups());
+      setBackups(dataStore.getBackups(currentSchoolId));
       toastService.success('Đã xóa bản sao lưu thành công.');
     }
   };
@@ -295,7 +309,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
             }`}
           >
             <History className="w-4 h-4 text-blue-600" />
-            <span>Danh sách Phiên bản & Bản sao lưu ({backups.length})</span>
+            <span>Danh sách Phiên bản & Bản sao lưu ({schoolBackups.length})</span>
           </button>
 
           <button
@@ -388,14 +402,7 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
               )}
 
               {/* Danh sách các bản sao lưu đã lưu */}
-              {(() => {
-                const schoolBackups = backups.filter((b) => {
-                  if (currentSchoolId === 'school_quyhop' || currentSchoolId === 'school_admin') return true;
-                  return b.schoolId === currentSchoolId;
-                });
-
-                return (
-                  <div className="space-y-3">
+              <div className="space-y-3">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
                       <span>Các phiên bản đã lưu trong hệ thống ({schoolBackups.length})</span>
                       <span className="text-[11px] text-slate-400 font-normal">Bấm "Khôi phục ngay" để nạp 100% dữ liệu</span>
@@ -499,8 +506,6 @@ export const VersionBackupManagerModal: React.FC<VersionBackupManagerModalProps>
                       </div>
                     )}
                   </div>
-                );
-              })()}
             </div>
           )}
 

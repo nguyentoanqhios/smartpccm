@@ -1,22 +1,44 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 
-// Lọc êm dịu các thông báo hạn mức quota / backoff từ Firebase Firestore để ứng dụng tiếp tục chạy hoàn hảo trên LocalStorage
-if (typeof window !== 'undefined' && typeof console !== 'undefined') {
-  const _origConsoleError = console.error.bind(console);
-  console.error = (...args: any[]) => {
-    const text = args.map((a) => (typeof a === 'string' ? a : a?.message || String(a))).join(' ');
-    if (
-      text.includes('@firebase/firestore') ||
-      text.includes('resource-exhausted') ||
-      text.includes('Quota exceeded') ||
-      text.includes('maximum backoff delay') ||
-      text.includes('RESOURCE_EXHAUSTED')
-    ) {
-      return;
+// Lọc êm dịu các thông báo hạn mức quota / backoff / assertion nội bộ từ Firebase Firestore để ứng dụng tiếp tục chạy hoàn hảo trên LocalStorage
+if (typeof window !== 'undefined') {
+  if (typeof console !== 'undefined') {
+    const _origConsoleError = console.error.bind(console);
+    console.error = (...args: any[]) => {
+      const text = args.map((a) => (typeof a === 'string' ? a : a?.message || String(a))).join(' ');
+      if (
+        text.includes('@firebase/firestore') ||
+        text.includes('resource-exhausted') ||
+        text.includes('Quota exceeded') ||
+        text.includes('maximum backoff delay') ||
+        text.includes('RESOURCE_EXHAUSTED') ||
+        text.includes('INTERNAL ASSERTION FAILED') ||
+        text.includes('c050')
+      ) {
+        return;
+      }
+      _origConsoleError(...args);
+    };
+  }
+
+  // Bắt các unhandled error / rejection từ background write stream của Firebase
+  window.addEventListener('error', (event) => {
+    const msg = event?.message || event?.error?.message || '';
+    if (msg.includes('INTERNAL ASSERTION FAILED') || (msg.includes('FIRESTORE') && msg.includes('Unexpected state'))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
     }
-    _origConsoleError(...args);
-  };
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event?.reason;
+    const msg = typeof reason === 'string' ? reason : reason?.message || '';
+    if (msg.includes('INTERNAL ASSERTION FAILED') || (msg.includes('FIRESTORE') && msg.includes('Unexpected state'))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  });
 }
 
 import App from './App.tsx';

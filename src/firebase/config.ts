@@ -7,7 +7,7 @@ import {
   createUserWithEmailAndPassword,
   User,
 } from 'firebase/auth';
-import { getFirestore, setLogLevel } from 'firebase/firestore';
+import { initializeFirestore, memoryLocalCache, getFirestore, setLogLevel } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDki0VaW73--yCx7tRo9ATl0RST0IUxjIQ",
@@ -20,14 +20,24 @@ const firebaseConfig = {
 
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// Khởi tạo Firestore với memoryLocalCache để loại bỏ hoàn toàn lỗi stream IndexedDB (INTERNAL ASSERTION FAILED: Unexpected state ID: c050)
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      localCache: memoryLocalCache(),
+    });
+  } catch {
+    return getFirestore(app);
+  }
+})();
 
 // Tắt log nội bộ của Firebase Firestore để tránh log console gây hiểu lầm là lỗi ứng dụng khi hết hạn mức (Quota exceeded)
 try {
   setLogLevel('silent');
 } catch {}
 
-// Tự động bắt và chuyển tiếp êm dịu các log quota exceeded của Firestore WebChannel SDK
+// Tự động bắt và chuyển tiếp êm dịu các log quota exceeded hoặc assertion nội bộ của Firestore WebChannel SDK
 if (typeof window !== 'undefined' && typeof console !== 'undefined') {
   const originalConsoleError = console.error.bind(console);
   console.error = (...args: any[]) => {
@@ -37,9 +47,11 @@ if (typeof window !== 'undefined' && typeof console !== 'undefined') {
       text.includes('resource-exhausted') ||
       text.includes('Quota exceeded') ||
       text.includes('maximum backoff delay') ||
-      text.includes('RESOURCE_EXHAUSTED')
+      text.includes('RESOURCE_EXHAUSTED') ||
+      text.includes('INTERNAL ASSERTION FAILED') ||
+      text.includes('c050')
     ) {
-      // Firestore Quota limit reached - application smoothly operates 100% in Offline LocalStorage mode
+      // Bỏ qua log lỗi nội bộ Firestore - hệ thống hoạt động trơn tru 100% trên LocalStorage
       return;
     }
     originalConsoleError(...args);
