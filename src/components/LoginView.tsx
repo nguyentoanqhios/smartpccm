@@ -63,11 +63,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
       : (isAdminSchool(initialSchoolId)
         ? 'nguyentoanqh@gmail.com'
         : '');
-  const initialPass = urlParams.pass || '';
-
+  // BẢO MẬT: Tuyệt đối không tự động nạp mật khẩu từ tham số URL, người dùng bắt buộc phải tự nhập mật khẩu
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState(initialEmail);
-  const [password, setPassword] = useState(initialPass);
+  const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState(urlParams.adminName || initialLicense?.adminName || '');
   const [schoolId, setSchoolId] = useState(initialSchoolId);
@@ -80,6 +79,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   // Lắng nghe dữ liệu trường & tải license từ Firestore nếu cần
   React.useEffect(() => {
+    // Bảo mật: Xóa ngay lập tức tham số pass khỏi URL nếu có
+    if (typeof window !== 'undefined' && window.location.search && (window.location.search.includes('pass=') || window.location.search.includes('password='))) {
+      try {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('pass');
+        cleanUrl.searchParams.delete('password');
+        cleanUrl.searchParams.delete('pwd');
+        window.history.replaceState(null, '', cleanUrl.toString());
+      } catch {}
+    }
+
     // Luôn tải danh sách bản quyền mới nhất từ Cloud Firestore khi mở trang đăng nhập
     dataStore.loadLicensesFromCloud().catch(() => {});
 
@@ -378,7 +388,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
 
     // XÁC THỰC MẬT KHẨU VÀ ĐĂNG NHẬP
-    const assignedPass = targetLic?.assignedPasswordHint?.trim() || (urlParams.schoolId === targetSchoolId ? urlParams.pass?.trim() : undefined);
+    // BẢO MẬT: Chỉ xác thực theo mật khẩu đã cấp trong hệ thống hoặc mật khẩu tài khoản cá nhân, tuyệt đối không tin cậy urlParams.pass
+    const assignedPass = targetLic?.assignedPasswordHint?.trim();
     const existingUser = dataStore.getUsers().find((u) => isSameEmail(u.email, trimmedEmail));
 
     let isValidPass = false;
@@ -391,8 +402,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
       // Trường được cấp quyền riêng: BẮT BUỘC ĐÚNG MẬT KHẨU ĐƯỢC CẤP
       if (assignedPass) {
         isValidPass = password === assignedPass;
-      } else if (urlParams.pass) {
-        isValidPass = password === urlParams.pass.trim();
       } else {
         isValidPass = password === '123456';
       }
@@ -538,8 +547,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   if (schoolName) params.set('schoolName', schoolName);
                   const admEmail = urlParams.adminEmail || initialLicense?.adminEmail;
                   if (admEmail) params.set('adminEmail', admEmail);
-                  const passHint = urlParams.pass || initialLicense?.assignedPasswordHint;
-                  if (passHint) params.set('pass', passHint);
+                  // BẢO MẬT: TUYỆT ĐỐI KHÔNG KÈM MẬT KHẨU TRONG LINK
                   const fullUrl = `${base}?${params.toString()}`;
                   navigator.clipboard.writeText(fullUrl);
                   setSuccessMessage('Đã sao chép link đăng nhập của trường này!');

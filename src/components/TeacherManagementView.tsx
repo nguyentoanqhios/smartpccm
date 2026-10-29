@@ -532,7 +532,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     setFormStartYear('');
     setFormInitialDegree('Đại học Sư phạm');
     const deptList = departments.length > 0 ? departments : dataStore.getDepartments();
-    const validDeptId = deptList.find((d) => d.id === selectedDept)?.id || deptList[0]?.id || 'dept_toan_tin';
+    const validDeptId = deptList.find((d) => d.id === selectedDept)?.id || deptList[0]?.id || '';
     setFormDeptId(validDeptId);
     const wpList = workplaces.length > 0 ? workplaces : dataStore.getWorkplaces();
     const defaultWp = wpList.find((w) => w.isDefault) || wpList[0];
@@ -647,7 +647,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     // Kiểm tra và lấy departmentId hợp lệ (phòng trường hợp tổ đã bị xóa hoặc chưa nạp)
     const deptList = departments.length > 0 ? departments : dataStore.getDepartments();
     const chosenDept = deptList.find((d) => d.id === formDeptId) || deptList[0];
-    const validDeptId = chosenDept?.id || 'dept_toan_tin';
+    const validDeptId = chosenDept?.id || '';
 
     // Loại bỏ trùng lặp môn học
     const cleanSubjects: string[] = Array.from(

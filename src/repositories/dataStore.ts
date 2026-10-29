@@ -878,7 +878,6 @@ class DataStore {
           }
           if (urlParams.adminEmail) this.schoolLicenses[existingLicIndex].adminEmail = urlParams.adminEmail;
           if (urlParams.adminName) this.schoolLicenses[existingLicIndex].adminName = urlParams.adminName;
-          if (urlParams.pass) this.schoolLicenses[existingLicIndex].assignedPasswordHint = urlParams.pass;
         } else {
           // Tìm trong backupLicenses trước để lấy tên chính xác
           const foundBackup = backupLicenses.find((b) => b.id === urlSchoolId || b.id.replace(/^school_/, '') === urlSchoolId.replace(/^school_/, ''));
@@ -890,7 +889,7 @@ class DataStore {
             schoolName: targetName,
             adminEmail: urlParams.adminEmail || foundBackup?.adminEmail || '',
             adminName: urlParams.adminName || foundBackup?.adminName || `Quản trị viên ${targetName}`.trim(),
-            assignedPasswordHint: urlParams.pass || foundBackup?.assignedPasswordHint || undefined,
+            assignedPasswordHint: foundBackup?.assignedPasswordHint || '123456',
             status: foundBackup?.status || 'active',
             planType: foundBackup?.planType || 'annual',
             expiresAt: foundBackup?.expiresAt || '2027-08-31T23:59:59.000Z',
@@ -1352,14 +1351,35 @@ class DataStore {
       }
 
       this.branches = this.getItem(this.getScopedKey(STORAGE_KEYS.BRANCHES, schoolId), [...INITIAL_BRANCHES]);
-      this.departments = this.getItem(this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId), INITIAL_DEPARTMENTS.map((d) => ({
-        ...d,
-        schoolId,
-        teacherIds: [],
-        headTeacherId: undefined,
-        deputyTeacherId: undefined,
-        deputyTeacherIds: [],
-      })));
+      this.departments = this.getItem(
+        this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId),
+        isQuyHop
+          ? INITIAL_DEPARTMENTS.map((d) => ({
+              ...d,
+              schoolId,
+              teacherIds: [],
+              headTeacherId: undefined,
+              deputyTeacherId: undefined,
+              deputyTeacherIds: [],
+            }))
+          : []
+      );
+
+      // Nếu không phải trường admin (quyhop), loại bỏ triệt để các tổ mẫu (INITIAL_DEPARTMENTS)
+      // nếu trường đã có tổ chuyên môn riêng hoặc các tổ mẫu này không được gán cho giáo viên nào
+      if (!isQuyHop && Array.isArray(this.departments) && this.departments.length > 0) {
+        const initDeptCodes = new Set(INITIAL_DEPARTMENTS.map((d) => d.code.toUpperCase()));
+        const initDeptIds = new Set(INITIAL_DEPARTMENTS.map((d) => d.id));
+        const hasCustomDepts = this.departments.some(
+          (d) => !initDeptIds.has(d.id) && !initDeptCodes.has((d.code || '').toUpperCase())
+        );
+        if (hasCustomDepts) {
+          const assignedDeptIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.departmentId));
+          this.departments = this.departments.filter(
+            (d) => !initDeptIds.has(d.id) || assignedDeptIds.has(d.id)
+          );
+        }
+      }
       this.workplaces = this.getItem(this.getScopedKey(STORAGE_KEYS.WORKPLACES, schoolId), INITIAL_WORKPLACES);
       this.subjects = this.deduplicateSubjectsList(this.getItem(this.getScopedKey(STORAGE_KEYS.SUBJECTS, schoolId), [...INITIAL_SUBJECTS]));
       this.schoolYears = this.getItem(this.getScopedKey(STORAGE_KEYS.SCHOOL_YEARS, schoolId), [...INITIAL_SCHOOL_YEARS]);
@@ -1437,14 +1457,16 @@ class DataStore {
       this.assignments = [];
       this.curriculum = [...INITIAL_CURRICULUM];
       this.branches = [...INITIAL_BRANCHES];
-      this.departments = INITIAL_DEPARTMENTS.map((d) => ({
-        ...d,
-        schoolId,
-        teacherIds: [],
-        headTeacherId: undefined,
-        deputyTeacherId: undefined,
-        deputyTeacherIds: [],
-      }));
+      this.departments = isQuyHop
+        ? INITIAL_DEPARTMENTS.map((d) => ({
+            ...d,
+            schoolId,
+            teacherIds: [],
+            headTeacherId: undefined,
+            deputyTeacherId: undefined,
+            deputyTeacherIds: [],
+          }))
+        : [];
       this.workplaces = [...INITIAL_WORKPLACES];
       this.duties = [...INITIAL_DUTIES];
       this.subjects = this.deduplicateSubjectsList([...INITIAL_SUBJECTS]);
@@ -2474,16 +2496,14 @@ class DataStore {
       // Tự động kiểm tra và khởi tạo bản quyền nếu liên kết chứa thông số trường hợp lệ (?schoolId=...&schoolName=...)
       const urlParams = this.detectUrlSchoolParams();
       if (urlParams.schoolId === targetId && urlParams.schoolName) {
-        let assignedPass = urlParams.pass || '';
-        if (!assignedPass) {
-          try {
-            const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
-            const bLic = backupLicenses.find((l) => l.id.toLowerCase() === targetId.toLowerCase() || l.id.replace(/^school_/, '').toLowerCase() === targetId.replace(/^school_/, '').toLowerCase());
-            if (bLic?.assignedPasswordHint) {
-              assignedPass = bLic.assignedPasswordHint;
-            }
-          } catch {}
-        }
+        let assignedPass = '123456';
+        try {
+          const backupLicenses = this.getItem<SchoolTenantLicense[]>('pccm_all_registered_school_licenses', []);
+          const bLic = backupLicenses.find((l) => l.id.toLowerCase() === targetId.toLowerCase() || l.id.replace(/^school_/, '').toLowerCase() === targetId.replace(/^school_/, '').toLowerCase());
+          if (bLic?.assignedPasswordHint) {
+            assignedPass = bLic.assignedPasswordHint;
+          }
+        } catch {}
         const autoLic: SchoolTenantLicense = {
           id: targetId,
           schoolName: urlParams.schoolName,
@@ -3028,6 +3048,19 @@ class DataStore {
   }
 
   /**
+   * Lấy danh sách tổ chuyên môn của một trường học cụ thể
+   */
+  public getDepartmentsForSchool(schoolId: string): Department[] {
+    if (!schoolId) return [];
+    if (schoolId === this.currentSchoolId) {
+      return this.getDepartments();
+    }
+    const scopedKey = this.getScopedKey(STORAGE_KEYS.DEPARTMENTS, schoolId);
+    const loaded = this.getItem<Department[]>(scopedKey, []);
+    return Array.isArray(loaded) ? loaded.filter((d) => !d.schoolId || d.schoolId === schoolId) : [];
+  }
+
+  /**
    * Lấy danh sách lớp học của một trường học cụ thể
    */
   public getClassesForSchool(schoolId: string): SchoolClass[] {
@@ -3083,11 +3116,12 @@ class DataStore {
     }
     const scopedTeachersKey = this.getScopedKey(STORAGE_KEYS.TEACHERS, schoolId);
     const currentTeachers = this.getItem<Teacher[]>(scopedTeachersKey, []);
+    const schoolDepts = this.getDepartmentsForSchool(schoolId);
     const newTeacher: Teacher = {
       id: `tc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       ...teacher,
       schoolId,
-      departmentId: teacher.departmentId || 'dept_toan_tin',
+      departmentId: teacher.departmentId || schoolDepts[0]?.id || '',
       workplaceId: teacher.workplaceId || 'wp_main',
       workplace: teacher.workplace || 'Điểm chính',
       isDeleted: false,
@@ -3446,14 +3480,31 @@ class DataStore {
       await ensureFirebaseAuth();
     } catch {}
 
+    const sId = this.currentSchoolId || 'school_admin';
+    const isQuyHop = isAdminSchool(sId);
+    let targetDepartments = this.departments;
+    if (!isQuyHop && Array.isArray(targetDepartments) && targetDepartments.length > 0) {
+      const initDeptCodes = new Set(INITIAL_DEPARTMENTS.map((d) => d.code.toUpperCase()));
+      const initDeptIds = new Set(INITIAL_DEPARTMENTS.map((d) => d.id));
+      const hasCustomDepts = targetDepartments.some(
+        (d) => !initDeptIds.has(d.id) && !initDeptCodes.has((d.code || '').toUpperCase())
+      );
+      if (hasCustomDepts) {
+        const assignedDeptIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.departmentId));
+        targetDepartments = targetDepartments.filter(
+          (d) => !initDeptIds.has(d.id) || assignedDeptIds.has(d.id)
+        );
+      }
+    }
+
     const result = await firestoreRepository.syncAllDataToFirestore(
-      this.currentSchoolId || 'school_admin',
+      sId,
       {
         schoolInfo: this.schoolInfo,
         teachers: this.teachers,
         classes: this.classes,
         subjects: this.subjects,
-        departments: this.departments,
+        departments: targetDepartments,
         assignments: this.assignments,
         versions: this.versions,
         curriculum: this.curriculum,
@@ -3527,7 +3578,23 @@ class DataStore {
       onProgress?.('Đang tải tổ chuyên môn & điểm trường...', 75);
       const cloudDepartments = await firestoreRepository.getCollectionData<Department>(targetSchoolId, 'departments');
       if (cloudDepartments && cloudDepartments.length > 0) {
-        this.departments = cloudDepartments;
+        let cleanDepts = cloudDepartments;
+        if (!isAdminSchool(targetSchoolId)) {
+          const initDeptCodes = new Set(INITIAL_DEPARTMENTS.map((d) => d.code.toUpperCase()));
+          const initDeptIds = new Set(INITIAL_DEPARTMENTS.map((d) => d.id));
+          const hasCustomDepts = cleanDepts.some(
+            (d) => !initDeptIds.has(d.id) && !initDeptCodes.has((d.code || '').toUpperCase())
+          );
+          if (hasCustomDepts) {
+            const assignedDeptIds = new Set(this.teachers.filter((t) => !t.isDeleted).map((t) => t.departmentId));
+            const unwantedInitDepts = cleanDepts.filter((d) => initDeptIds.has(d.id) && !assignedDeptIds.has(d.id));
+            cleanDepts = cleanDepts.filter((d) => !initDeptIds.has(d.id) || assignedDeptIds.has(d.id));
+            for (const unwanted of unwantedInitDepts) {
+              firestoreRepository.deleteDocData(targetSchoolId, 'departments', unwanted.id).catch(() => {});
+            }
+          }
+        }
+        this.departments = cleanDepts;
       }
 
       const cloudBranches = await firestoreRepository.getCollectionData<SchoolBranch>(targetSchoolId, 'branches');
@@ -5077,15 +5144,8 @@ class DataStore {
     if (!this.workplaces || this.workplaces.length === 0) {
       this.workplaces = [...INITIAL_WORKPLACES];
     }
-    if (!this.departments || this.departments.length === 0) {
-      this.departments = INITIAL_DEPARTMENTS.map((d) => ({
-        ...d,
-        schoolId: this.currentSchoolId,
-        teacherIds: [],
-        headTeacherId: undefined,
-        deputyTeacherId: undefined,
-        deputyTeacherIds: [],
-      }));
+    if (!this.departments) {
+      this.departments = [];
     }
 
     const defaultWp = this.workplaces.find((w) => w.isDefault) || this.workplaces[0] || INITIAL_WORKPLACES[0];
@@ -5100,7 +5160,7 @@ class DataStore {
       wpName = defaultWp?.name;
     }
 
-    const defaultDeptId = this.departments[0]?.id || 'dept_toan_tin';
+    const defaultDeptId = this.departments[0]?.id || '';
     const finalDeptId = teacher.departmentId || defaultDeptId;
 
     const newTeacher: Teacher = {
@@ -5169,7 +5229,7 @@ class DataStore {
     const created: Teacher[] = [];
     const timestamp = Date.now();
     const defaultWp = this.workplaces.find((w) => w.isDefault) || this.workplaces[0];
-    const defaultDeptId = this.departments[0]?.id || 'dept_toan_tin';
+    const defaultDeptId = this.departments[0]?.id || '';
 
     teachersData.forEach((t, i) => {
       let wpId = t.workplaceId;
@@ -5280,7 +5340,7 @@ class DataStore {
         if (matchDept) resolvedDeptId = matchDept.id;
       }
       if (!resolvedDeptId) {
-        resolvedDeptId = this.departments[0]?.id || 'dept_toan_tin';
+        resolvedDeptId = this.departments[0]?.id || '';
       }
 
       const cleanPositions = tData.positions
@@ -8452,19 +8512,25 @@ class DataStore {
     clearCloud: boolean = true
   ): { success: boolean; message: string } {
     const sId = schoolId || this.currentSchoolId || 'school_admin';
+    const isQuyHop = isAdminSchool(sId);
 
     // 1. Làm sạch bộ nhớ
     this.teachers = [];
     this.classes = [];
     this.assignments = [];
 
-    // Làm sạch chức vụ trong tổ chuyên môn
-    this.departments.forEach((d) => {
-      d.teacherIds = [];
-      d.headTeacherId = undefined;
-      d.deputyTeacherId = undefined;
-      d.deputyTeacherIds = [];
-    });
+    // Nếu không phải trường admin, không gán hay lưu giữ danh mục tổ mặc định của admin
+    if (!isQuyHop) {
+      this.departments = [];
+    } else {
+      // Làm sạch chức vụ trong tổ chuyên môn cho admin
+      this.departments.forEach((d) => {
+        d.teacherIds = [];
+        d.headTeacherId = undefined;
+        d.deputyTeacherId = undefined;
+        d.deputyTeacherIds = [];
+      });
+    }
 
     // 2. Lưu trạng thái trắng vào scoped localStorage
     const scopedTeachersKey = this.getScopedKey(STORAGE_KEYS.TEACHERS, sId);
@@ -8497,9 +8563,13 @@ class DataStore {
       firestoreRepository.clearSubCollection(sId, 'teachers').catch(() => {});
       firestoreRepository.clearSubCollection(sId, 'classes').catch(() => {});
       firestoreRepository.clearSubCollection(sId, 'assignments').catch(() => {});
-      this.departments.forEach((d) => {
-        firestoreRepository.setDocData(sId, 'departments', d.id, d).catch(() => {});
-      });
+      if (!isQuyHop) {
+        firestoreRepository.clearSubCollection(sId, 'departments').catch(() => {});
+      } else {
+        this.departments.forEach((d) => {
+          firestoreRepository.setDocData(sId, 'departments', d.id, d).catch(() => {});
+        });
+      }
     }
 
     this.saveLocalCacheOnly();

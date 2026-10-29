@@ -68,7 +68,7 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
   const [qtCode, setQtCode] = useState('');
   const [qtName, setQtName] = useState('');
   const [qtGender, setQtGender] = useState<'Nam' | 'Nữ'>('Nữ');
-  const [qtDeptId, setQtDeptId] = useState('dept_toan_tin');
+  const [qtDeptId, setQtDeptId] = useState('');
   const [qtQuota, setQtQuota] = useState(19);
   const [qtSubjects, setQtSubjects] = useState('Toán');
 
@@ -365,7 +365,8 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     setQtCode(`GV${String(nextNum).padStart(2, '0')}`);
     setQtName('');
     setQtGender('Nữ');
-    setQtDeptId('dept_toan_tin');
+    const schoolDepts = dataStore.getDepartmentsForSchool(lic.id);
+    setQtDeptId(schoolDepts[0]?.id || '');
     setQtQuota(19);
     setQtSubjects('Toán');
   };
@@ -600,15 +601,12 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
         return custom.replace(/^https?:\/\/pccm-[a-z0-9_-]+/i, `https://pccm-${sSlug || 'main'}`);
       }
 
-      // 3. Nếu là domain gốc: truyền đầy đủ tham số để bất kỳ máy nào mở cũng nhận diện đúng tên trường & mật khẩu
+      // 3. Nếu là domain gốc: truyền thông tin mã trường, tên trường & email quản trị (BẢO MẬT: TUYỆT ĐỐI KHÔNG KÈM MẬT KHẨU)
       if (sId) {
         const params = new URLSearchParams();
         params.set('schoolId', sId);
         if (sName && sName !== 'TRƯỜNG THCS MỚI') params.set('schoolName', sName);
         if (sEmail) params.set('adminEmail', sEmail);
-        if (licenseObj?.assignedPasswordHint) {
-          params.set('pass', licenseObj.assignedPasswordHint);
-        }
         return `${custom}/?${params.toString()}`;
       }
       return custom;
@@ -618,7 +616,8 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
     const fullBase = `${baseOrigin}${cleanPath}`;
 
     if (sId) {
-      // Truyền tham số schoolId, schoolName và pass rõ ràng để thiết bị đối tác luôn nhận diện 100% chính xác
+      // Truyền tham số schoolId, schoolName, adminEmail để thiết bị đối tác luôn nhận diện đúng trường học
+      // BẢO MẬT: TUYỆT ĐỐI KHÔNG KÈM MẬT KHẨU TRONG LINK để ngăn chặn ai có link cũng vào được
       const params = new URLSearchParams();
       params.set('schoolId', sId);
       if (sName && sName !== 'TRƯỜNG THCS MỚI') {
@@ -626,9 +625,6 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
       }
       if (sEmail) {
         params.set('adminEmail', sEmail);
-      }
-      if (licenseObj?.assignedPasswordHint) {
-        params.set('pass', licenseObj.assignedPasswordHint);
       }
       return `${baseOrigin}/?${params.toString()}`;
     }
@@ -2388,17 +2384,29 @@ export const SchoolLicenseManager: React.FC<SchoolLicenseManagerProps> = ({ curr
 
               <div className="space-y-1">
                 <label className="font-bold text-slate-700">Tổ chuyên môn</label>
-                <select
-                  value={qtDeptId}
-                  onChange={(e) => setQtDeptId(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
-                >
-                  <option value="dept_toan_tin">Tổ Toán - Tin học</option>
-                  <option value="dept_khtn">Tổ Khoa học tự nhiên (Lý - Hóa - Sinh)</option>
-                  <option value="dept_van_khxh">Tổ Ngữ văn - Lịch sử & Địa lí</option>
-                  <option value="dept_tieng_anh">Tổ Tiếng Anh - Ngoại ngữ</option>
-                  <option value="dept_nghe_thuat">Tổ GDTC - Âm nhạc - Mỹ thuật - GDCD</option>
-                </select>
+                {(() => {
+                  const schoolDepts = quickTeacherSchool ? dataStore.getDepartmentsForSchool(quickTeacherSchool.id) : [];
+                  if (schoolDepts.length === 0) {
+                    return (
+                      <div className="p-2.5 bg-slate-50 border border-dashed border-slate-300 rounded-xl text-xs text-slate-500">
+                        Trường chưa tạo danh mục tổ chuyên môn (trường sẽ tự tạo theo cơ cấu tổ thực tế).
+                      </div>
+                    );
+                  }
+                  return (
+                    <select
+                      value={qtDeptId}
+                      onChange={(e) => setQtDeptId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                    >
+                      {schoolDepts.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name || d.fullName}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
               </div>
 
               <div className="space-y-1">
